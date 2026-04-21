@@ -1,0 +1,59 @@
+# 项目中的使用的配置
+
+# MySQL 配置
+mysql:
+  # MySQL 主机
+  host: 127.0.0.1
+  # MySQL 端口
+  port: 3306
+  # MySQL 用户名
+  user: root
+  # MySQL 密码
+  password: "your_password_here"
+  # 数据库名称
+  database: smart_task_platform
+  # 字符集
+  charset: utf8mb4
+  # 是否解析时间
+  parse_time: true
+  # 时区
+  loc: Local
+  # 最大连接数
+  max_open_conns: 100
+  # 最大空闲连接数
+  max_idle_conns: 20
+  # 连接最大生命周期(单位: s)
+  conn_max_lifetime: 30
+  # 连接最大空闲时间(单位: s)
+  conn_max_idle_time: 10
+
+
+# Redis 配置
+redis:
+  # Redis 地址，集群写多个
+  addrs:
+    - 127.0.0.1:6379  
+  # 密码，没有就空
+  password: ""        
+  # 数据库，集群只能用0
+  db: 0               
+  # 最大连接数
+  pool_size: 100       
+  # 最小空闲连接
+  min_idle_conns: 10    
+
+
+# Log 日志配置
+log:
+  # 运行模式 debug/prod
+  mode: "debug"
+  # 日志存储路径
+  log_path: "./logs"
+  # 日志存储文件名称
+  log_name: "log"
+  # 日志文件的最大存储大小
+  max_size: 128
+  # 最多保存的日志文件个数
+  max_backups: 30
+  # 最多保存的天数
+  max_age: 7
