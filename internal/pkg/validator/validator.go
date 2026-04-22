@@ -1,0 +1,64 @@
+// Package validator 提供数据验证功能。
+package validator
+
+import (
+	"regexp"
+	"unicode/utf8"
+)
+
+// IsValidPassword 检查密码是否符合要求
+func IsValidPassword(password string) bool {
+	if len(password) < 8 || len(password) > 65 { // 密码长度必须在8到64个字符之间
+		return false
+	}
+
+	base := regexp.MustCompile(`^[A-Za-z0-9@$!%*?&.]+$`) // 密码只能包含字母、数字和特殊字符
+	if !base.MatchString(password) {                     // 密码包含非法字符
+		return false
+	}
+
+	hasDigit := regexp.MustCompile(`[0-9]`).MatchString(password)        // 密码必须包含数字
+	hasLetter := regexp.MustCompile(`[A-Za-z]`).MatchString(password)    // 密码必须包含字母
+	hasSpecial := regexp.MustCompile(`[@$!%*?&.]`).MatchString(password) // 密码必须包含特殊字符
+
+	count := 0
+	if hasDigit {
+		count++
+	}
+	if hasLetter {
+		count++
+	}
+	if hasSpecial {
+		count++
+	}
+
+	return count >= 2
+}
+
+// IsValidEmail 检查邮箱地址是否符合要求
+func IsValidEmail(email string) bool {
+	emailRegex, err := regexp.Compile(`^[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,126}$`)
+	if err != nil {
+		return false
+	}
+	return emailRegex.MatchString(email) // 检查邮箱地址是否符合正则表达式
+}
+
+// IsValidUsername 检查用户名是否符合要求
+func IsValidUsername(username string) bool {
+	usernameRegex, err := regexp.Compile(`^[a-zA-Z0-9_]{3,32}$`)
+	if err != nil {
+		return false
+	}
+	return usernameRegex.MatchString(username) // 检查用户名是否符合正则表达式
+}
+
+// IsValidNickname 检查昵称是否符合要求
+func IsValidNickname(nickname string) bool {
+	// 昵称不能超过16个 utf-8 编码
+	// 仅支持：（大小写）英文字符、下划线、数字、汉字
+	if utf8.RuneCountInString(nickname) > 16 {
+		return false
+	}
+	return regexp.MustCompile(`^[a-zA-Z0-9_\p{Han}]+$`).MatchString(nickname)
+}
