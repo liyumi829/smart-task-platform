@@ -9,46 +9,54 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+const (
+	// 运行模式
+	ModeDev     = "dev"
+	ModeRelease = "release"
+)
+
 // Config 项目的最终配置信息
 type Config struct {
+	// 服务器配置
+	Server ServerConfig `yaml:"server"`
+
 	// 日志配置
-	Logger LoggerConfig
+	Logger LoggerConfig `yaml:"log"`
 
 	// 数据库配置
-	MySQL MySQLConfig
+	MySQL MySQLConfig `yaml:"mysql"`
 
 	// Redis 配置
-	Redis RedisConfig
+	Redis RedisConfig `yaml:"redis"`
+
+	// JWT 配置
+	JWT JWTConfig `yaml:"jwt"`
 }
 
 func (c *Config) setDefault() {
+	c.Server.setDefault() // 服务器
 	c.Logger.setDefault() // 日志
 	c.MySQL.setDefault()  // MySQL
 	c.Redis.setDefault()  // Redis
+	c.JWT.setDefault()    // JWT
 }
 
-// InitConfig 初始化配置信息
-func InitConfig(file string) *Config {
+func InitConfig(file string) (*Config, error) {
 	var cfg Config
 	if file == "" {
-		// 错误的路径
-		fmt.Println("Invalid configuration file path - empty")
-		return nil
+		return nil, fmt.Errorf("empty config file path")
 	}
-	// 读取配置配置文件的数据
+
 	data, err := os.ReadFile(file)
 	if err != nil {
-		if os.IsNotExist(err) {
-			fmt.Println("Configuration file does not exist", fmt.Sprintf("path: %s", file))
-		}
-		return nil
+		return nil, err
 	}
-	// 读取成功，解析数据
+
 	if err := yaml.Unmarshal(data, &cfg); err != nil {
-		fmt.Println("Failed to parse YAML file", fmt.Sprintf("path: %s", file))
-		return nil
+		return nil, err
 	}
+
 	// 解析成功
-	(&cfg).setDefault() // 合并默认值
-	return &cfg
+	cfg.setDefault() // 合并默认配置
+	return &cfg, nil
 }

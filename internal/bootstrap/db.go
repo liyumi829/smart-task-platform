@@ -59,7 +59,7 @@ func InitDB(mode string, c *MySQLConfig) *gorm.DB {
 
 	// 日志模式进行数据库配置
 	var cfg *gorm.Config // 配置信息
-	if mode == "debug" {
+	if mode == ModeDev {
 		cfg = &gorm.Config{
 			Logger: logger.Default.LogMode(logger.Info), // 打印 SQL
 		}
