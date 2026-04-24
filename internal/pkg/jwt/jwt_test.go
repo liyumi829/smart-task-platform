@@ -1,400 +1,668 @@
-// 测试代码
 package jwt
 
 import (
 	"errors"
+	"strings"
 	"testing"
 	"time"
 
 	jwtv5 "github.com/golang-jwt/jwt/v5"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
-// newTestManager 创建测试用 JWT 管理器
+const (
+	testSecret             = "unit-test-secret"
+	testOtherSecret        = "unit-test-other-secret"
+	testIssuer             = "smart-task-platform"
+	testUserID      uint64 = 1001
+	testUsername           = "zhangsan"
+	testSessionID          = "sess_001"
+	testAccessJTI          = "access_jti_001"
+	testRefreshJTI         = "refresh_jti_001"
+)
+
 func newTestManager() *Manager {
 	return NewManager(
-		"test-secret-key",
-		"test-issuer",
-		60*time.Minute,
-		7*24*time.Hour,
+		testSecret,
+		testIssuer,
+		time.Hour,
+		24*time.Hour,
 	)
 }
 
-// TestNewManager 测试创建 JWT 管理器
-func TestNewManager(t *testing.T) {
-	t.Parallel()
-
-	secret := "unit-test-secret"
-	issuer := "unit-test-issuer"
-	accessExpire := 60 * time.Minute
-	refreshExpire := 7 * 24 * time.Hour
-
-	manager := NewManager(secret, issuer, accessExpire, refreshExpire)
-
-	t.Logf("manager = %+v", manager)
-
-	if manager == nil {
-		t.Fatal("expected manager not nil")
-	}
-	if string(manager.secret) != secret {
-		t.Fatalf("expected secret %q, got %q", secret, string(manager.secret))
-	}
-	if manager.issuer != issuer {
-		t.Fatalf("expected issuer %q, got %q", issuer, manager.issuer)
-	}
-	if manager.expireAccess != accessExpire {
-		t.Fatalf("expected expireAccess %v, got %v", accessExpire, manager.expireAccess)
-	}
-	if manager.expireRefresh != refreshExpire {
-		t.Fatalf("expected expireRefresh %v, got %v", refreshExpire, manager.expireRefresh)
-	}
+func newExpiredTestManager() *Manager {
+	return NewManager(
+		testSecret,
+		testIssuer,
+		-time.Second,
+		-time.Second,
+	)
 }
 
-// TestManagerGenerateAccessToken 测试生成访问令牌
-func TestManagerGenerateAccessToken(t *testing.T) {
-	t.Parallel()
+func assertCommonClaims(
+	t *testing.T,
+	claims *Claims,
+	wantUserID uint64,
+	wantUsername string,
+	wantSessionID string,
+	wantJTI string,
+	wantTokenType string,
+	wantIssuer string,
+) {
+	t.Helper()
 
+	require.NotNil(t, claims)
+
+	assert.Equal(t, wantUserID, claims.UserID)
+	assert.Equal(t, wantUsername, claims.Username)
+	assert.Equal(t, wantSessionID, claims.SessionID)
+	assert.Equal(t, wantJTI, claims.ID)
+	assert.Equal(t, wantTokenType, claims.TokenType)
+
+	assert.Equal(t, wantIssuer, claims.Issuer)
+	assert.Equal(t, wantUsername, claims.Subject)
+	assert.Equal(t, wantJTI, claims.ID)
+
+	require.NotNil(t, claims.IssuedAt)
+	require.NotNil(t, claims.ExpiresAt)
+	require.NotNil(t, claims.NotBefore)
+
+	assert.False(t, claims.ExpiresAt.Time.Before(claims.IssuedAt.Time))
+	assert.False(t, claims.NotBefore.Time.After(time.Now().Add(time.Second)))
+}
+
+func TestManager_NewManager(t *testing.T) {
+	manager := NewManager(testSecret, testIssuer, time.Hour, 24*time.Hour)
+
+	require.NotNil(t, manager)
+	assert.Equal(t, []byte(testSecret), manager.secret)
+	assert.Equal(t, testIssuer, manager.issuer)
+	assert.Equal(t, time.Hour, manager.expireAccess)
+	assert.Equal(t, 24*time.Hour, manager.expireRefresh)
+
+	t.Logf("[NewManager] issuer=%s access_ttl=%s refresh_ttl=%s",
+		manager.issuer,
+		manager.expireAccess,
+		manager.expireRefresh,
+	)
+}
+
+func TestManager_AccessTTL_RefreshTTL(t *testing.T) {
 	manager := newTestManager()
-	userID := uint64(1001)
-	username := "zhangsan"
 
-	tokenString, expiresIn, err := manager.generateAccessToken(userID, username)
-	if err != nil {
-		t.Fatalf("generateAccessToken returned error: %v", err)
-	}
+	assert.Equal(t, time.Hour, manager.AccessTTL())
+	assert.Equal(t, 24*time.Hour, manager.RefreshTTL())
 
-	t.Logf("access token = %s", tokenString)
-	t.Logf("access expiresIn = %d", expiresIn)
+	t.Logf("[TTL] access_ttl=%s refresh_ttl=%s", manager.AccessTTL(), manager.RefreshTTL())
+}
 
-	if tokenString == "" {
-		t.Fatal("expected access token not empty")
-	}
-	if expiresIn != int64(manager.expireAccess.Seconds()) {
-		t.Fatalf("expected expiresIn %d, got %d", int64(manager.expireAccess.Seconds()), expiresIn)
-	}
+func TestManager_GenerateAccessToken(t *testing.T) {
+	manager := newTestManager()
+
+	tokenString, expiresIn, err := manager.GenerateAccessToken(
+		testUserID,
+		testUsername,
+		testSessionID,
+		testAccessJTI,
+	)
+
+	t.Logf("[GenerateAccessToken] token=%s expires_in=%d err=%v", tokenString, expiresIn, err)
+
+	require.NoError(t, err)
+	require.NotEmpty(t, tokenString)
+	assert.Equal(t, int64(3600), expiresIn)
 
 	claims, err := manager.ParseToken(tokenString)
-	if err != nil {
-		t.Fatalf("ParseToken returned error: %v", err)
-	}
 
-	t.Logf("access claims = %+v", claims)
+	t.Logf("[ParseAccessToken] claims=%+v err=%v", claims, err)
 
-	if claims == nil {
-		t.Fatal("expected claims not nil")
-	}
-	if claims.UserID != userID {
-		t.Fatalf("expected userID %d, got %d", userID, claims.UserID)
-	}
-	if claims.Username != username {
-		t.Fatalf("expected username %q, got %q", username, claims.Username)
-	}
-	if claims.Issuer != manager.issuer {
-		t.Fatalf("expected issuer %q, got %q", manager.issuer, claims.Issuer)
-	}
-	if claims.Subject != username {
-		t.Fatalf("expected subject %q, got %q", username, claims.Subject)
-	}
-	if claims.IssuedAt == nil {
-		t.Fatal("expected IssuedAt not nil")
-	}
-	if claims.ExpiresAt == nil {
-		t.Fatal("expected ExpiresAt not nil")
-	}
-	if claims.NotBefore == nil {
-		t.Fatal("expected NotBefore not nil")
-	}
-	if !claims.ExpiresAt.After(claims.IssuedAt.Time) {
-		t.Fatalf("expected ExpiresAt > IssuedAt, got ExpiresAt=%v IssuedAt=%v", claims.ExpiresAt.Time, claims.IssuedAt.Time)
-	}
-	if claims.NotBefore.Time.After(claims.ExpiresAt.Time) {
-		t.Fatalf("expected NotBefore <= ExpiresAt, got NotBefore=%v ExpiresAt=%v", claims.NotBefore.Time, claims.ExpiresAt.Time)
-	}
+	require.NoError(t, err)
+
+	assertCommonClaims(
+		t,
+		claims,
+		testUserID,
+		testUsername,
+		testSessionID,
+		testAccessJTI,
+		"access",
+		testIssuer,
+	)
+
+	assert.WithinDuration(t, time.Now().Add(time.Hour), claims.ExpiresAt.Time, 3*time.Second)
 }
 
-// TestManagerGenerateRefreshToken 测试生成刷新令牌
-func TestManagerGenerateRefreshToken(t *testing.T) {
-	t.Parallel()
-
+func TestManager_GenerateRefreshToken(t *testing.T) {
 	manager := newTestManager()
-	userID := uint64(2002)
-	username := "lisi"
 
-	tokenString, expiresIn, err := manager.generateRefreshToken(userID, username)
-	if err != nil {
-		t.Fatalf("generateRefreshToken returned error: %v", err)
-	}
+	tokenString, expiresIn, err := manager.GenerateRefreshToken(
+		testUserID,
+		testUsername,
+		testSessionID,
+		testRefreshJTI,
+	)
 
-	t.Logf("refresh token = %s", tokenString)
-	t.Logf("refresh expiresIn = %d", expiresIn)
+	t.Logf("[GenerateRefreshToken] token=%s expires_in=%d err=%v", tokenString, expiresIn, err)
 
-	if tokenString == "" {
-		t.Fatal("expected refresh token not empty")
-	}
-	if expiresIn != int64(manager.expireRefresh.Seconds()) {
-		t.Fatalf("expected expiresIn %d, got %d", int64(manager.expireRefresh.Seconds()), expiresIn)
-	}
+	require.NoError(t, err)
+	require.NotEmpty(t, tokenString)
+	assert.Equal(t, int64(86400), expiresIn)
 
 	claims, err := manager.ParseToken(tokenString)
-	if err != nil {
-		t.Fatalf("ParseToken returned error: %v", err)
-	}
 
-	t.Logf("refresh claims = %+v", claims)
+	t.Logf("[ParseRefreshToken] claims=%+v err=%v", claims, err)
 
-	if claims == nil {
-		t.Fatal("expected claims not nil")
-	}
-	if claims.UserID != userID {
-		t.Fatalf("expected userID %d, got %d", userID, claims.UserID)
-	}
-	if claims.Username != username {
-		t.Fatalf("expected username %q, got %q", username, claims.Username)
-	}
-	if claims.Issuer != manager.issuer {
-		t.Fatalf("expected issuer %q, got %q", manager.issuer, claims.Issuer)
-	}
-	if claims.Subject != username {
-		t.Fatalf("expected subject %q, got %q", username, claims.Subject)
-	}
-	if claims.IssuedAt == nil {
-		t.Fatal("expected IssuedAt not nil")
-	}
-	if claims.ExpiresAt == nil {
-		t.Fatal("expected ExpiresAt not nil")
-	}
-	if claims.NotBefore == nil {
-		t.Fatal("expected NotBefore not nil")
-	}
-	if !claims.ExpiresAt.After(claims.IssuedAt.Time) {
-		t.Fatalf("expected ExpiresAt > IssuedAt, got ExpiresAt=%v IssuedAt=%v", claims.ExpiresAt.Time, claims.IssuedAt.Time)
-	}
-	if claims.NotBefore.Time.After(claims.ExpiresAt.Time) {
-		t.Fatalf("expected NotBefore <= ExpiresAt, got NotBefore=%v ExpiresAt=%v", claims.NotBefore.Time, claims.ExpiresAt.Time)
-	}
+	require.NoError(t, err)
+
+	assertCommonClaims(
+		t,
+		claims,
+		testUserID,
+		testUsername,
+		testSessionID,
+		testRefreshJTI,
+		"refresh",
+		testIssuer,
+	)
+
+	assert.WithinDuration(t, time.Now().Add(24*time.Hour), claims.ExpiresAt.Time, 3*time.Second)
 }
 
-// TestManagerGenerateToken 测试同时生成访问令牌和刷新令牌
-func TestManagerGenerateToken(t *testing.T) {
-	t.Parallel()
-
+func TestManager_GenerateTokenPair(t *testing.T) {
 	manager := newTestManager()
-	userID := uint64(3003)
-	username := "wangwu"
 
-	accessToken, refreshToken, expiresIn, err := manager.GenerateToken(userID, username)
-	if err != nil {
-		t.Fatalf("GenerateToken returned error: %v", err)
-	}
+	accessToken, refreshToken, expiresIn, err := manager.GenerateTokenPair(
+		testUserID,
+		testUsername,
+		testSessionID,
+		testAccessJTI,
+		testRefreshJTI,
+	)
 
-	t.Logf("access token = %s", accessToken)
-	t.Logf("refresh token = %s", refreshToken)
-	t.Logf("expiresIn = %d", expiresIn)
+	t.Logf("[GenerateTokenPair] access_token=%s refresh_token=%s expires_in=%d err=%v",
+		accessToken,
+		refreshToken,
+		expiresIn,
+		err,
+	)
 
-	if accessToken == "" {
-		t.Fatal("expected access token not empty")
-	}
-	if refreshToken == "" {
-		t.Fatal("expected refresh token not empty")
-	}
-	if expiresIn != int64(manager.expireAccess.Seconds()) {
-		t.Fatalf("expected expiresIn %d, got %d", int64(manager.expireAccess.Seconds()), expiresIn)
-	}
+	require.NoError(t, err)
+	require.NotEmpty(t, accessToken)
+	require.NotEmpty(t, refreshToken)
+	assert.NotEqual(t, accessToken, refreshToken)
+	assert.Equal(t, int64(3600), expiresIn)
 
 	accessClaims, err := manager.ParseToken(accessToken)
-	if err != nil {
-		t.Fatalf("ParseToken access returned error: %v", err)
-	}
+	t.Logf("[ParseTokenPairAccess] claims=%+v err=%v", accessClaims, err)
+	require.NoError(t, err)
+
 	refreshClaims, err := manager.ParseToken(refreshToken)
-	if err != nil {
-		t.Fatalf("ParseToken refresh returned error: %v", err)
-	}
+	t.Logf("[ParseTokenPairRefresh] claims=%+v err=%v", refreshClaims, err)
+	require.NoError(t, err)
 
-	t.Logf("access claims = %+v", accessClaims)
-	t.Logf("refresh claims = %+v", refreshClaims)
-
-	// 断言 access token claims
-	if accessClaims.UserID != userID {
-		t.Fatalf("expected access userID %d, got %d", userID, accessClaims.UserID)
-	}
-	if accessClaims.Username != username {
-		t.Fatalf("expected access username %q, got %q", username, accessClaims.Username)
-	}
-	if accessClaims.Issuer != manager.issuer {
-		t.Fatalf("expected access issuer %q, got %q", manager.issuer, accessClaims.Issuer)
-	}
-	if accessClaims.Subject != username {
-		t.Fatalf("expected access subject %q, got %q", username, accessClaims.Subject)
-	}
-	if accessClaims.IssuedAt == nil || accessClaims.ExpiresAt == nil || accessClaims.NotBefore == nil {
-		t.Fatal("expected access token registered claims not nil")
-	}
-
-	// 断言 refresh token claims
-	if refreshClaims.UserID != userID {
-		t.Fatalf("expected refresh userID %d, got %d", userID, refreshClaims.UserID)
-	}
-	if refreshClaims.Username != username {
-		t.Fatalf("expected refresh username %q, got %q", username, refreshClaims.Username)
-	}
-	if refreshClaims.Issuer != manager.issuer {
-		t.Fatalf("expected refresh issuer %q, got %q", manager.issuer, refreshClaims.Issuer)
-	}
-	if refreshClaims.Subject != username {
-		t.Fatalf("expected refresh subject %q, got %q", username, refreshClaims.Subject)
-	}
-	if refreshClaims.IssuedAt == nil || refreshClaims.ExpiresAt == nil || refreshClaims.NotBefore == nil {
-		t.Fatal("expected refresh token registered claims not nil")
-	}
-
-	// 刷新令牌应比访问令牌过期更晚
-	if !refreshClaims.ExpiresAt.After(accessClaims.ExpiresAt.Time) {
-		t.Fatalf(
-			"expected refresh token expire later than access token, access=%v refresh=%v",
-			accessClaims.ExpiresAt.Time,
-			refreshClaims.ExpiresAt.Time,
-		)
-	}
-}
-
-// TestManagerParseToken_Success 测试成功解析令牌
-func TestManagerParseToken_Success(t *testing.T) {
-	t.Parallel()
-
-	manager := newTestManager()
-	userID := uint64(4004)
-	username := "zhaoliu"
-
-	tokenString, _, err := manager.generateAccessToken(userID, username)
-	if err != nil {
-		t.Fatalf("generateAccessToken returned error: %v", err)
-	}
-
-	claims, err := manager.ParseToken(tokenString)
-	if err != nil {
-		t.Fatalf("ParseToken returned error: %v", err)
-	}
-
-	t.Logf("parsed claims = %+v", claims)
-
-	if claims == nil {
-		t.Fatal("expected claims not nil")
-	}
-	if claims.UserID != userID {
-		t.Fatalf("expected userID %d, got %d", userID, claims.UserID)
-	}
-	if claims.Username != username {
-		t.Fatalf("expected username %q, got %q", username, claims.Username)
-	}
-	if claims.Issuer != manager.issuer {
-		t.Fatalf("expected issuer %q, got %q", manager.issuer, claims.Issuer)
-	}
-	if claims.Subject != username {
-		t.Fatalf("expected subject %q, got %q", username, claims.Subject)
-	}
-	if claims.IssuedAt == nil {
-		t.Fatal("expected IssuedAt not nil")
-	}
-	if claims.ExpiresAt == nil {
-		t.Fatal("expected ExpiresAt not nil")
-	}
-	if claims.NotBefore == nil {
-		t.Fatal("expected NotBefore not nil")
-	}
-}
-
-// TestManagerParseToken_Expired 测试解析过期令牌
-func TestManagerParseToken_Expired(t *testing.T) {
-	t.Parallel()
-
-	manager := NewManager(
-		"expired-secret",
-		"expired-issuer",
-		-1*time.Minute, // 设置为已过期
-		7*24*time.Hour,
+	assertCommonClaims(
+		t,
+		accessClaims,
+		testUserID,
+		testUsername,
+		testSessionID,
+		testAccessJTI,
+		"access",
+		testIssuer,
 	)
 
-	tokenString, _, err := manager.generateAccessToken(5005, "expired-user")
-	if err != nil {
-		t.Fatalf("generateAccessToken returned error: %v", err)
-	}
+	assertCommonClaims(
+		t,
+		refreshClaims,
+		testUserID,
+		testUsername,
+		testSessionID,
+		testRefreshJTI,
+		"refresh",
+		testIssuer,
+	)
 
-	t.Logf("expired token = %s", tokenString)
-
-	claims, err := manager.ParseToken(tokenString)
-	t.Logf("expired parse claims = %+v", claims)
-	t.Logf("expired parse err = %v", err)
-
-	if err == nil {
-		t.Fatal("expected expired token error, got nil")
-	}
-	if !errors.Is(err, ExpiredTokenError) {
-		t.Fatalf("expected error %v, got %v", ExpiredTokenError, err)
-	}
-	if claims != nil {
-		t.Fatalf("expected claims nil, got %+v", claims)
-	}
+	assert.NotEqual(t, accessClaims.ID, refreshClaims.ID)
+	assert.NotEqual(t, accessClaims.ID, refreshClaims.ID)
 }
 
-// TestManagerParseToken_InvalidToken 测试解析非法令牌
-func TestManagerParseToken_InvalidToken(t *testing.T) {
-	t.Parallel()
-
-	manager := newTestManager()
-	invalidToken := "this.is.not.a.valid.jwt"
-
-	claims, err := manager.ParseToken(invalidToken)
-	t.Logf("invalid parse claims = %+v", claims)
-	t.Logf("invalid parse err = %v", err)
-
-	if err == nil {
-		t.Fatal("expected invalid token error, got nil")
-	}
-	if !errors.Is(err, InvalidTokenError) {
-		t.Fatalf("expected error %v, got %v", InvalidTokenError, err)
-	}
-	if claims != nil {
-		t.Fatalf("expected claims nil, got %+v", claims)
-	}
-}
-
-// TestManagerParseToken_InvalidSigningMethod 测试解析非法签名方法令牌
-func TestManagerParseToken_InvalidSigningMethod(t *testing.T) {
-	t.Parallel()
-
+func TestManager_ParseToken_InvalidTokenString(t *testing.T) {
 	manager := newTestManager()
 
-	claims := Claims{
-		UserID:   6006,
-		Username: "invalid-sign-method-user",
-		RegisteredClaims: jwtv5.RegisteredClaims{
-			Issuer:    manager.issuer,
-			Subject:   "invalid-sign-method-user",
-			IssuedAt:  jwtv5.NewNumericDate(time.Now()),
-			ExpiresAt: jwtv5.NewNumericDate(time.Now().Add(10 * time.Minute)),
-			NotBefore: jwtv5.NewNumericDate(time.Now()),
+	tests := []struct {
+		name  string
+		token string
+	}{
+		{
+			name:  "空字符串",
+			token: "",
+		},
+		{
+			name:  "随机字符串",
+			token: "invalid_token",
+		},
+		{
+			name:  "只有两段",
+			token: "header.payload",
+		},
+		{
+			name:  "三段但内容非法",
+			token: "a.b.c",
 		},
 	}
 
-	// 使用 none 签名算法构造非法签名方法令牌
-	token := jwtv5.NewWithClaims(jwtv5.SigningMethodNone, claims)
-	tokenString, err := token.SignedString(jwtv5.UnsafeAllowNoneSignatureType)
-	if err != nil {
-		t.Fatalf("SignedString returned error: %v", err)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			claims, err := manager.ParseToken(tt.token)
+
+			t.Logf("[ParseToken InvalidTokenString] name=%s token=%q claims=%+v err=%v",
+				tt.name,
+				tt.token,
+				claims,
+				err,
+			)
+
+			require.Error(t, err)
+			assert.Nil(t, claims)
+			assert.ErrorIs(t, err, InvalidTokenError)
+		})
+	}
+}
+
+func TestManager_ParseToken_ExpiredToken(t *testing.T) {
+	manager := newExpiredTestManager()
+
+	tokenString, expiresIn, err := manager.GenerateAccessToken(
+		testUserID,
+		testUsername,
+		testSessionID,
+		testAccessJTI,
+	)
+
+	t.Logf("[GenerateExpiredAccessToken] token=%s expires_in=%d err=%v", tokenString, expiresIn, err)
+
+	require.NoError(t, err)
+	require.NotEmpty(t, tokenString)
+	assert.Less(t, expiresIn, int64(0))
+
+	claims, err := manager.ParseToken(tokenString)
+
+	t.Logf("[ParseExpiredAccessToken] claims=%+v err=%v", claims, err)
+
+	require.Error(t, err)
+	assert.Nil(t, claims)
+	assert.ErrorIs(t, err, ExpiredTokenError)
+}
+
+func TestManager_ParseToken_WrongSecret(t *testing.T) {
+	manager := newTestManager()
+	otherManager := NewManager(testOtherSecret, testIssuer, time.Hour, 24*time.Hour)
+
+	tokenString, expiresIn, err := manager.GenerateAccessToken(
+		testUserID,
+		testUsername,
+		testSessionID,
+		testAccessJTI,
+	)
+
+	t.Logf("[GenerateTokenForWrongSecret] token=%s expires_in=%d err=%v",
+		tokenString,
+		expiresIn,
+		err,
+	)
+
+	require.NoError(t, err)
+	require.NotEmpty(t, tokenString)
+
+	claims, err := otherManager.ParseToken(tokenString)
+
+	t.Logf("[ParseTokenWrongSecret] claims=%+v err=%v", claims, err)
+
+	require.Error(t, err)
+	assert.Nil(t, claims)
+	assert.ErrorIs(t, err, InvalidTokenError)
+}
+
+func TestManager_ParseToken_InvalidSigningMethod_None(t *testing.T) {
+	manager := newTestManager()
+
+	claims := Claims{
+		UserID:    testUserID,
+		Username:  testUsername,
+		SessionID: testSessionID,
+		TokenType: "access",
+		RegisteredClaims: jwtv5.RegisteredClaims{
+			Issuer:    testIssuer,
+			Subject:   testUsername,
+			IssuedAt:  jwtv5.NewNumericDate(time.Now()),
+			ExpiresAt: jwtv5.NewNumericDate(time.Now().Add(time.Hour)),
+			NotBefore: jwtv5.NewNumericDate(time.Now()),
+			ID:        testAccessJTI,
+		},
 	}
 
-	t.Logf("invalid signing method token = %s", tokenString)
+	tokenString, err := jwtv5.NewWithClaims(jwtv5.SigningMethodNone, claims).
+		SignedString(jwtv5.UnsafeAllowNoneSignatureType)
 
-	parsedClaims, parseErr := manager.ParseToken(tokenString)
-	t.Logf("invalid signing parse claims = %+v", parsedClaims)
-	t.Logf("invalid signing parse err = %v", parseErr)
+	t.Logf("[GenerateNoneAlgToken] token=%s err=%v", tokenString, err)
 
-	if parseErr == nil {
-		t.Fatal("expected invalid signing method error, got nil")
+	require.NoError(t, err)
+	require.NotEmpty(t, tokenString)
+
+	parsedClaims, err := manager.ParseToken(tokenString)
+
+	t.Logf("[ParseNoneAlgToken] claims=%+v err=%v", parsedClaims, err)
+
+	require.Error(t, err)
+	assert.Nil(t, parsedClaims)
+	assert.ErrorIs(t, err, InvalidSigningMethodError)
+}
+
+func TestManager_ParseToken_InvalidSigningMethod_RSA(t *testing.T) {
+	manager := newTestManager()
+
+	claims := Claims{
+		UserID:    testUserID,
+		Username:  testUsername,
+		SessionID: testSessionID,
+		TokenType: "access",
+		RegisteredClaims: jwtv5.RegisteredClaims{
+			Issuer:    testIssuer,
+			Subject:   testUsername,
+			IssuedAt:  jwtv5.NewNumericDate(time.Now()),
+			ExpiresAt: jwtv5.NewNumericDate(time.Now().Add(time.Hour)),
+			NotBefore: jwtv5.NewNumericDate(time.Now()),
+			ID:        testAccessJTI,
+		},
 	}
-	if !errors.Is(parseErr, InvalidSigningMethodError) {
-		t.Fatalf("expected error %v, got %v", InvalidSigningMethodError, parseErr)
+
+	// 直接手工构造一个 alg=RS256 的 token 字符串。
+	// ParseToken 在 Keyfunc 阶段会先检查签名方法，发现不是 HMAC 后返回 InvalidSigningMethodError。
+	tokenString, err := jwtv5.NewWithClaims(jwtv5.SigningMethodRS256, claims).
+		SignedString([]byte(testSecret))
+
+	t.Logf("[GenerateRS256Token] token=%s err=%v", tokenString, err)
+
+	require.Error(t, err)
+	assert.Empty(t, tokenString)
+
+	// 这里使用一个伪造的 RS256 token，重点测试 ParseToken 对非 HMAC alg 的拒绝逻辑。
+	tokenString = strings.Join([]string{
+		"eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9",
+		"eyJ1c2VyX2lkIjoxMDAxLCJ1c2VybmFtZSI6InpoYW5nc2FuIiwic2Vzc2lvbl9pZCI6InNlc3NfMDAxIiwianRpIjoiYWNjZXNzX2p0aV8wMDEiLCJ0b2tlbl90eXBlIjoiYWNjZXNzIiwiaXNzIjoic21hcnQtdGFzay1wbGF0Zm9ybSIsInN1YiI6InpoYW5nc2FuIiwiZXhwIjo0MTAyNDQ0ODAwLCJuYmYiOjE3MDAwMDAwMDAsImlhdCI6MTcwMDAwMDAwMCwianRpIjoiYWNjZXNzX2p0aV8wMDEifQ",
+		"fake-signature",
+	}, ".")
+
+	parsedClaims, err := manager.ParseToken(tokenString)
+
+	t.Logf("[ParseRS256Token] claims=%+v err=%v", parsedClaims, err)
+
+	require.Error(t, err)
+	assert.Nil(t, parsedClaims)
+	assert.ErrorIs(t, err, InvalidSigningMethodError)
+}
+
+func TestManager_ParseToken_TamperedToken(t *testing.T) {
+	manager := newTestManager()
+
+	tokenString, expiresIn, err := manager.GenerateAccessToken(
+		testUserID,
+		testUsername,
+		testSessionID,
+		testAccessJTI,
+	)
+
+	t.Logf("[GenerateTokenForTamper] token=%s expires_in=%d err=%v",
+		tokenString,
+		expiresIn,
+		err,
+	)
+
+	require.NoError(t, err)
+	require.NotEmpty(t, tokenString)
+
+	parts := strings.Split(tokenString, ".")
+	require.Len(t, parts, 3)
+
+	// 修改 payload，但不重新签名，签名校验应该失败。
+	parts[1] = "eyJ1c2VyX2lkIjo5OTk5fQ"
+	tamperedToken := strings.Join(parts, ".")
+
+	claims, err := manager.ParseToken(tamperedToken)
+
+	t.Logf("[ParseTamperedToken] token=%s claims=%+v err=%v", tamperedToken, claims, err)
+
+	require.Error(t, err)
+	assert.Nil(t, claims)
+	assert.ErrorIs(t, err, InvalidTokenError)
+}
+
+func TestManager_ParseToken_NotBeforeInFuture(t *testing.T) {
+	manager := newTestManager()
+
+	now := time.Now()
+	claims := Claims{
+		UserID:    testUserID,
+		Username:  testUsername,
+		SessionID: testSessionID,
+		TokenType: "access",
+		RegisteredClaims: jwtv5.RegisteredClaims{
+			Issuer:    testIssuer,
+			Subject:   testUsername,
+			IssuedAt:  jwtv5.NewNumericDate(now),
+			ExpiresAt: jwtv5.NewNumericDate(now.Add(time.Hour)),
+			NotBefore: jwtv5.NewNumericDate(now.Add(time.Hour)),
+			ID:        testAccessJTI,
+		},
 	}
-	if parsedClaims != nil {
-		t.Fatalf("expected claims nil, got %+v", parsedClaims)
+
+	tokenString, err := jwtv5.NewWithClaims(jwtv5.SigningMethodHS256, claims).
+		SignedString([]byte(testSecret))
+
+	t.Logf("[GenerateFutureNBFToken] token=%s err=%v", tokenString, err)
+
+	require.NoError(t, err)
+	require.NotEmpty(t, tokenString)
+
+	parsedClaims, err := manager.ParseToken(tokenString)
+
+	t.Logf("[ParseFutureNBFToken] claims=%+v err=%v", parsedClaims, err)
+
+	require.Error(t, err)
+	assert.Nil(t, parsedClaims)
+
+	// 当前 Manager 只单独转换过期错误，nbf 未生效这类错误统一转换为 InvalidTokenError。
+	assert.ErrorIs(t, err, InvalidTokenError)
+}
+
+func TestManager_ParseToken_IssuerNotValidated(t *testing.T) {
+	manager := newTestManager()
+
+	now := time.Now()
+	claims := Claims{
+		UserID:    testUserID,
+		Username:  testUsername,
+		SessionID: testSessionID,
+		TokenType: "access",
+		RegisteredClaims: jwtv5.RegisteredClaims{
+			Issuer:    "other-issuer",
+			Subject:   testUsername,
+			IssuedAt:  jwtv5.NewNumericDate(now),
+			ExpiresAt: jwtv5.NewNumericDate(now.Add(time.Hour)),
+			NotBefore: jwtv5.NewNumericDate(now),
+			ID:        testAccessJTI,
+		},
 	}
+
+	tokenString, err := jwtv5.NewWithClaims(jwtv5.SigningMethodHS256, claims).
+		SignedString([]byte(testSecret))
+
+	t.Logf("[GenerateOtherIssuerToken] token=%s err=%v", tokenString, err)
+
+	require.NoError(t, err)
+	require.NotEmpty(t, tokenString)
+
+	parsedClaims, err := manager.ParseToken(tokenString)
+
+	t.Logf("[ParseOtherIssuerToken] claims=%+v err=%v", parsedClaims, err)
+
+	// 注意：
+	// 当前 ParseToken 没有校验 issuer，只校验签名、过期时间、nbf 等 RegisteredClaims 默认规则。
+	// 所以 other-issuer 仍然可以解析成功。
+	require.NoError(t, err)
+	require.NotNil(t, parsedClaims)
+	assert.Equal(t, "other-issuer", parsedClaims.Issuer)
+}
+
+func TestManager_ParseToken_TokenTypeNotValidated(t *testing.T) {
+	manager := newTestManager()
+
+	now := time.Now()
+	claims := Claims{
+		UserID:    testUserID,
+		Username:  testUsername,
+		SessionID: testSessionID,
+		TokenType: "custom",
+		RegisteredClaims: jwtv5.RegisteredClaims{
+			Issuer:    testIssuer,
+			Subject:   testUsername,
+			IssuedAt:  jwtv5.NewNumericDate(now),
+			ExpiresAt: jwtv5.NewNumericDate(now.Add(time.Hour)),
+			NotBefore: jwtv5.NewNumericDate(now),
+			ID:        testAccessJTI,
+		},
+	}
+
+	tokenString, err := jwtv5.NewWithClaims(jwtv5.SigningMethodHS256, claims).
+		SignedString([]byte(testSecret))
+
+	t.Logf("[GenerateCustomTokenTypeToken] token=%s err=%v", tokenString, err)
+
+	require.NoError(t, err)
+	require.NotEmpty(t, tokenString)
+
+	parsedClaims, err := manager.ParseToken(tokenString)
+
+	t.Logf("[ParseCustomTokenTypeToken] claims=%+v err=%v", parsedClaims, err)
+
+	// 注意：
+	// 当前 ParseToken 不校验 token_type，只负责解析和签名校验。
+	// access / refresh 类型判断应由业务层完成，或者后续新增 ParseAccessToken / ParseRefreshToken。
+	require.NoError(t, err)
+	require.NotNil(t, parsedClaims)
+	assert.Equal(t, "custom", parsedClaims.TokenType)
+}
+
+func TestManager_ParseToken_JTIAndRegisteredIDConsistency(t *testing.T) {
+	manager := newTestManager()
+
+	tokenString, expiresIn, err := manager.GenerateAccessToken(
+		testUserID,
+		testUsername,
+		testSessionID,
+		testAccessJTI,
+	)
+
+	t.Logf("[GenerateTokenForJTIConsistency] token=%s expires_in=%d err=%v",
+		tokenString,
+		expiresIn,
+		err,
+	)
+
+	require.NoError(t, err)
+
+	claims, err := manager.ParseToken(tokenString)
+
+	t.Logf("[ParseTokenForJTIConsistency] claims_jti=%s registered_id=%s err=%v",
+		claims.ID,
+		claims.ID,
+		err,
+	)
+
+	require.NoError(t, err)
+	require.NotNil(t, claims)
+
+	assert.Equal(t, claims.ID, claims.ID)
+	assert.Equal(t, testAccessJTI, claims.ID)
+}
+
+func TestManager_ParseToken_EmptyBusinessFieldsStillValidJWT(t *testing.T) {
+	manager := newTestManager()
+
+	tokenString, expiresIn, err := manager.GenerateAccessToken(
+		0,
+		"",
+		"",
+		"",
+	)
+
+	t.Logf("[GenerateEmptyBusinessFieldsToken] token=%s expires_in=%d err=%v",
+		tokenString,
+		expiresIn,
+		err,
+	)
+
+	require.NoError(t, err)
+	require.NotEmpty(t, tokenString)
+
+	claims, err := manager.ParseToken(tokenString)
+
+	t.Logf("[ParseEmptyBusinessFieldsToken] claims=%+v err=%v", claims, err)
+
+	// 注意：
+	// 当前 Manager 不校验 user_id、username、session_id、jti 是否为空。
+	// 如果业务要求这些字段必填，应在 GenerateAccessToken/GenerateRefreshToken 或业务层补充参数校验。
+	require.NoError(t, err)
+	require.NotNil(t, claims)
+
+	assert.Equal(t, uint64(0), claims.UserID)
+	assert.Empty(t, claims.Username)
+	assert.Empty(t, claims.SessionID)
+	assert.Empty(t, claims.ID)
+	assert.Equal(t, "access", claims.TokenType)
+}
+
+func TestManager_ParseToken_ExpiredRefreshToken(t *testing.T) {
+	manager := newExpiredTestManager()
+
+	tokenString, expiresIn, err := manager.GenerateRefreshToken(
+		testUserID,
+		testUsername,
+		testSessionID,
+		testRefreshJTI,
+	)
+
+	t.Logf("[GenerateExpiredRefreshToken] token=%s expires_in=%d err=%v",
+		tokenString,
+		expiresIn,
+		err,
+	)
+
+	require.NoError(t, err)
+	require.NotEmpty(t, tokenString)
+	assert.Less(t, expiresIn, int64(0))
+
+	claims, err := manager.ParseToken(tokenString)
+
+	t.Logf("[ParseExpiredRefreshToken] claims=%+v err=%v", claims, err)
+
+	require.Error(t, err)
+	assert.Nil(t, claims)
+	assert.ErrorIs(t, err, ExpiredTokenError)
+}
+
+func TestManager_ParseToken_ErrorIdentity(t *testing.T) {
+	manager := newTestManager()
+
+	claims, err := manager.ParseToken("invalid_token")
+
+	t.Logf("[ParseTokenErrorIdentity] claims=%+v err=%v", claims, err)
+
+	require.Error(t, err)
+	assert.Nil(t, claims)
+
+	assert.True(t, errors.Is(err, InvalidTokenError))
+	assert.False(t, errors.Is(err, ExpiredTokenError))
+	assert.False(t, errors.Is(err, InvalidSigningMethodError))
 }

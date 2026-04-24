@@ -8,6 +8,7 @@ import (
 	"smart-task-platform/internal/api/handler"
 	"smart-task-platform/internal/api/router"
 	"smart-task-platform/internal/bootstrap"
+	redispkg "smart-task-platform/internal/pkg/redis"
 	"smart-task-platform/internal/repository"
 	"smart-task-platform/internal/service"
 
@@ -43,23 +44,23 @@ func main() {
 		cfg.Logger.Mode = cfg.Server.Mode
 	}
 
-	// 初始化日志、数据库、JWT 等组件
+	// 初始化日志、数据库 等组件以及中间件
 	bootstrap.InitLogger(&cfg.Logger)                   // 初始化全局日志器
 	db := bootstrap.InitDB(cfg.Server.Mode, &cfg.MySQL) // MySQL 数据库连接
+	redis := bootstrap.InitRedis(&cfg.Redis)            // Redis 连接
 	jwtManager := bootstrap.InitJWT(&cfg.JWT)           // JWT 管理器
-	// redis := bootstrap.InitRedis(&cfg.Redis) // Redis 连接
-
+	authStore := redispkg.NewRedisAuthStore(redis)      // 认证存储管理器
 	// 自动迁移 数据库表结构
 	if err := bootstrap.AutoMigrate(db); err != nil {
 		log.Fatalf("auto migrate failed: %v", err)
 	}
 
-	// 初始化仓储和事务管理器
-	userRepo := repository.NewUserRepository(db) // 用户表
+	// 事务管理器、初始化仓储
 	txManager := repository.NewTxManager(db)     // 事务管理器
+	userRepo := repository.NewUserRepository(db) // 用户表
 
 	// 初始化服务
-	authService := service.NewAuthService(userRepo, txManager, jwtManager) // 鉴权服务
+	authService := service.NewAuthService(txManager, userRepo, authStore, jwtManager) // 鉴权服务
 
 	// 初始化 Handler
 	authHandler := handler.NewAuthHandler(authService) // 鉴权 Handler
@@ -79,7 +80,7 @@ func main() {
 	}
 
 	// 注册路由
-	router.Register(r, authHandler, jwtManager)
+	router.Register(r, authHandler, jwtManager, authStore)
 
 	// 启动服务
 	addr := net.JoinHostPort(*host, *port)

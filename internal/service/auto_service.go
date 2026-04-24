@@ -1,4 +1,4 @@
-// Package service 定义了 auto 模块核心业务逻辑服务
+// Package service 定义了 auth 模块核心业务逻辑服务
 package service
 
 import (
@@ -12,45 +12,37 @@ import (
 
 	"smart-task-platform/internal/dto"
 	"smart-task-platform/internal/model"
-	"smart-task-platform/internal/pkg/jwt"
+	jwtpkg "smart-task-platform/internal/pkg/jwt"
 	"smart-task-platform/internal/pkg/password"
+	redispkg "smart-task-platform/internal/pkg/redis"
 	"smart-task-platform/internal/pkg/validator"
 	"smart-task-platform/internal/repository"
 )
 
-var (
-	ErrUsernameExists        = errors.New("username already exists") // 用户名已存在错误消息
-	ErrEmailExists           = errors.New("email already exists")    // 邮箱已存在错误消息
-	ErrInvalidUsernameFormat = errors.New("invalid username")        // 无效的用户名错误消息
-	ErrInvalidEmailFormat    = errors.New("invalid email")           // 无效的邮箱错误消息
-	ErrInvalidPasswordFormat = errors.New("invalid password")        // 无效的密码错误消息
-	ErrInvalidNicknameFormat = errors.New("invalid nickname")        // 无效的昵称错误消息
-	ErrInvalidAccountFormat  = errors.New("invalid account")         // 无效的账户错误消息
-	ErrUserDisabled          = errors.New("user is disabled")        // 用户被禁用错误消息
-	ErrPasswordMismatch      = errors.New("password does not match") // 密码不匹配错误消息
-	ErrUserNotFound          = errors.New("user not found")          // 用户未找到错误消息
-	ErrInvalidToken          = errors.New("invalid token")           // 无效的 Token 错误消息
-	ErrExpiredToken          = errors.New("refresh token expired")   // 刷新令牌过期错误消息
-	ErrInternal              = errors.New("internal server error")   // 内部服务器错误消息
+const (
+	constTokenType = "Bearer"
 )
 
 // AuthService 认证服务
 type AuthService struct {
-	userRepo repository.UserRepository // 用户仓库接口
-	txMgr    *repository.TxManager     // 事务管理器
-	jwtMgr   *jwt.Manager              // JWT 管理器
+	txMgr     *repository.TxManager // 事务管理器
+	jwtMgr    *jwtpkg.Manager       // JWT 管理器
+	userRepo  UserRepository        // 用户仓库接口
+	authStore AuthStoreInvoker      // 登录状态管理
 }
 
 // NewAuthService 创建认证服务
 func NewAuthService(
-	userRepo repository.UserRepository,
 	txMgr *repository.TxManager,
-	jwtMgr *jwt.Manager,
+	userRepo UserRepository,
+	authStore AuthStoreInvoker,
+	jwtMgr *jwtpkg.Manager,
 ) *AuthService {
 	return &AuthService{
-		userRepo: userRepo,
-		txMgr:    txMgr,
-		jwtMgr:   jwtMgr,
+		txMgr:     txMgr,
+		userRepo:  userRepo,
+		jwtMgr:    jwtMgr,
+		authStore: authStore,
 	}
 }
 
@@ -96,7 +88,8 @@ func (s *AuthService) Register(ctx context.Context, req *dto.RegisterReq) (*dto.
 			zap.NamedError("errUser", errUser),
 			zap.NamedError("errEmail", errEmail))
 
-		// 判断是否是用户不存在的错误，如果是用户不存在的错误则说明用户名或邮箱不存在，可以继续注册；如果是其他错误则说明查询过程中发生了错误，应该返回错误
+		// 判断是否是用户不存在的错误，如果是用户不存在的错误则说明用户名或邮箱不存在，可以继续注册；
+		// 如果是其他错误则说明查询过程中发生了错误，应该返回错误
 		if !errors.Is(errUser, repository.ErrUserNotFound) && !errors.Is(errEmail, repository.ErrUserNotFound) {
 			// 这里的错误可能是数据库连接错误或者其他查询错误，应该记录日志并返回错误
 			zap.L().Error("failed to check username or email existence",
@@ -113,7 +106,10 @@ func (s *AuthService) Register(ctx context.Context, req *dto.RegisterReq) (*dto.
 		zap.L().Warn("username or email already exists",
 			zap.String("username", req.Username),
 			zap.String("email", req.Email))
-		return nil, ErrUsernameExists // 用户名或邮箱已存在
+		if existsUsername {
+			return nil, ErrUsernameExists // 用户名已存在
+		}
+		return nil, ErrEmailExists // 邮箱已经存在
 	}
 
 	// 3、构造HashedPassword
@@ -149,6 +145,8 @@ func (s *AuthService) Register(ctx context.Context, req *dto.RegisterReq) (*dto.
 }
 
 // Login 登录
+//   - 查看旧session（可以不存在）、新 session value 覆盖旧属性
+//   - 删除旧 refresh、更新 refresh 状态
 func (s *AuthService) Login(ctx context.Context, req *dto.LoginReq) (*dto.LoginResp, error) {
 	req.Account = strings.TrimSpace(req.Account)
 
@@ -197,9 +195,12 @@ func (s *AuthService) Login(ctx context.Context, req *dto.LoginReq) (*dto.LoginR
 		return nil, ErrUserDisabled // 用户被禁用，返回用户被禁用错误
 	}
 
-	now := time.Now()                    // 获取当前时间
-	var accessToken, refreshToken string // 访问令牌和刷新令牌
-	var expiresIn int64                  // 过期时间，单位秒
+	now := time.Now()                         // 获取当前时间
+	var accessToken, refreshToken string      // 访问令牌和刷新令牌
+	var expiresIn int64                       // 过期时间，单位秒
+	newSessionID := redispkg.NewSessionID()   // 创建一个新的会话ID
+	newAccessJTI := redispkg.NewAccessJTI()   // 创建一个访问令牌的 jti
+	newRefreshJTI := redispkg.NewRefreshJTI() // 创建一个刷新令牌的 jti
 
 	// 使用事务更新最后登录时间和生成 Token，确保原子性
 	// 更新登录时间和发放 Token 是登录流程中两个重要的步骤，必须保证它们要么同时成功，要么同时失败，不能出现更新了登录时间但没有发放 Token 的情况，也不能出现发放了 Token 但没有更新登录时间的情况，这样才能保证系统状态的一致性和安全性
@@ -216,7 +217,12 @@ func (s *AuthService) Login(ctx context.Context, req *dto.LoginReq) (*dto.LoginR
 
 			// 生成 Token
 			var tokenErr error
-			accessToken, refreshToken, expiresIn, tokenErr = s.jwtMgr.GenerateToken(user.ID, user.Username)
+			accessToken, refreshToken, expiresIn, tokenErr = s.jwtMgr.GenerateTokenPair(
+				user.ID,
+				user.Username,
+				newSessionID,
+				newAccessJTI,
+				newRefreshJTI)
 			if tokenErr != nil {
 				zap.L().Error("failed to generate token",
 					zap.String("account", req.Account),
@@ -234,12 +240,48 @@ func (s *AuthService) Login(ctx context.Context, req *dto.LoginReq) (*dto.LoginR
 			zap.Error(err))
 		return nil, err
 	}
-	// 完成登录事务
+	// 上面事务执行成功
+	// 下面对上面的事务执行结果进行处理：执行redis auth store 管理模块
+	sessionState := &redispkg.AuthSession{
+		UserID:     user.ID,
+		Username:   user.Username,
+		SessionID:  newSessionID,                          // 新的会话ID
+		RefreshJTI: newRefreshJTI,                         // 新的 refresh jti
+		LoginAt:    now.Unix(),                            // 时间戳
+		ExpireAt:   now.Add(s.jwtMgr.RefreshTTL()).Unix(), // 过期时间戳
+	}
+	refreshState := &redispkg.RefreshTokenState{
+		UserID:    user.ID,
+		Username:  user.Username,
+		SessionID: newSessionID,                          // 新的会话ID
+		JTI:       newRefreshJTI,                         // 新的 refresh jti
+		IssuedAt:  now.Unix(),                            // 时间戳
+		ExpireAt:  now.Add(s.jwtMgr.RefreshTTL()).Unix(), // 过期时间戳
+	}
+	// redis 事务执行会话登录
+	err = redispkg.RetryRedisTx(
+		func() error {
+			return s.authStore.LoginSession(
+				ctx,
+				sessionState,
+				refreshState,
+				s.jwtMgr.RefreshTTL())
+		},
+	)
+	// 差错处理
+	if err != nil {
+		zap.L().Error("Error occurred in authentication storage during login",
+			zap.String("account", req.Account),
+			zap.Uint64("user_id", user.ID),
+			zap.Error(err))
+		return nil, err
+	}
+
 	// 返回登录响应，包含 Token 和用户信息摘要
 	return &dto.LoginResp{
 		AccessToken:  accessToken,
 		RefreshToken: refreshToken,
-		TokenType:    "Bearer",
+		TokenType:    constTokenType,
 		ExpiresIn:    expiresIn,
 		User: dto.UserSummary{
 			ID:       user.ID,
@@ -250,12 +292,30 @@ func (s *AuthService) Login(ctx context.Context, req *dto.LoginReq) (*dto.LoginR
 	}, nil
 }
 
-// Logout 退出登录（后续加入 Redis 登录状态再进行调整）
-func (s *AuthService) Logout(ctx context.Context, userID uint64) (*dto.LogoutResp, error) {
-	// 目前没有实际的退出登录操作，因为我们使用的是 JWT 无状态认证，前端只需要删除 Token 就行了
-	// 如果后续需要实现 Token 黑名单或者其他退出登录机制，可以在这里添加相关逻辑
+// Logout 退出登录
+//   - 删除当前会话、fresh token状态等信息
+//   - 将当前 access token 加入黑名单
+func (s *AuthService) Logout(ctx context.Context, claims *jwtpkg.Claims) (*dto.LogoutResp, error) {
+	err := redispkg.RetryRedisTx(
+		func() error {
+			return s.authStore.LogoutSession(ctx,
+				claims.UserID,
+				claims.SessionID,
+				claims.ID,
+				s.jwtMgr.AccessTTL())
+		},
+	)
+	// 差错处理：
+	if err != nil {
+		zap.L().Warn("Failed to logout",
+			zap.Uint64("user_id", claims.UserID),
+			zap.String("session_id", claims.SessionID),
+			zap.Error(err))
+		return nil, err
+	}
+
 	zap.L().Info("user logged out",
-		zap.Uint64("user_id", userID))
+		zap.Uint64("user_id", claims.UserID))
 	return &dto.LogoutResp{
 		Logout: true,
 	}, nil
@@ -293,6 +353,8 @@ func (s *AuthService) Me(ctx context.Context, userID uint64) (*dto.MeResp, error
 }
 
 // RefreshToken 刷新 Token
+//   - 检验 refresh token、删除原来的 refresh token 状态、保存新 refresh token 状态
+//   - 更新 session 属性的 jti（refresh token jti）
 func (s *AuthService) RefreshToken(ctx context.Context, req *dto.RefreshTokenReq) (*dto.RefreshTokenResp, error) {
 	// 1、验证刷新 Token 的格式是否正确，格式不正确直接返回错误，不需要解析 Token 了
 	req.RefreshToken = strings.TrimSpace(req.RefreshToken)
@@ -306,11 +368,11 @@ func (s *AuthService) RefreshToken(ctx context.Context, req *dto.RefreshTokenReq
 	if err != nil {
 		switch {
 		// 无效的签名方法和无效的 Token 都说明刷新令牌无效，返回无效账户错误
-		case errors.Is(err, jwt.InvalidSigningMethodError),
-			errors.Is(err, jwt.InvalidTokenError):
+		case errors.Is(err, jwtpkg.InvalidSigningMethodError),
+			errors.Is(err, jwtpkg.InvalidTokenError):
 			return nil, ErrInvalidToken // 刷新令牌无效，返回无效 Token 错误
 		// 过期的 Token
-		case errors.Is(err, jwt.ExpiredTokenError):
+		case errors.Is(err, jwtpkg.ExpiredTokenError):
 			return nil, ErrExpiredToken // 刷新令牌过期，返回刷新令牌过期错误
 		// 其他错误
 		default:
@@ -321,22 +383,111 @@ func (s *AuthService) RefreshToken(ctx context.Context, req *dto.RefreshTokenReq
 		}
 	}
 	// 解析成功
-	userID := claims.UserID     // 获取用户ID
-	username := claims.Username // 获取用户名
-	// 3、生成新的访问 Token 和刷新 Token
-	accessToken, _, expiresIn, err := s.jwtMgr.GenerateToken(userID, username) // TODO：目前先不实现刷新令牌乱转，后续再完善
+	if claims.TokenType != "refresh" { // 必须要求 refresh 接口只能用 refresh token
+		return nil, ErrInvalidToken
+	}
+
+	// 解析成功，构造新 State 执行事务
+
+	now := time.Now()                         // 时间
+	newAccessJTI := redispkg.NewAccessJTI()   // 新 access jti
+	newRefreshJTI := redispkg.NewRefreshJTI() // 新 refresh jti
+	// 生成新的访问 Token 和刷新 Token
+	accessToken, refreshToken, expiresIn, tokenErr := s.jwtMgr.GenerateTokenPair(
+		claims.UserID,
+		claims.Username,
+		claims.SessionID,
+		newAccessJTI,
+		newRefreshJTI)
+	if tokenErr != nil {
+		zap.L().Error("failed to generate token",
+			zap.String("account", claims.Username),
+			zap.Uint64("user_id", claims.UserID),
+			zap.Error(tokenErr))
+		return nil, tokenErr
+	}
+
+	// 生成新的 refresh state
+	newRefreshState := &redispkg.RefreshTokenState{
+		UserID:    claims.UserID,
+		Username:  claims.Username,
+		SessionID: claims.SessionID,
+		JTI:       newRefreshJTI,
+		IssuedAt:  now.Unix(),
+		ExpireAt:  now.Add(s.jwtMgr.RefreshTTL()).Unix(),
+	}
+
+	// 执行事务
+	err = redispkg.RetryRedisTx(
+		func() error {
+			return s.authStore.RotateRefreshToken(
+				ctx,
+				claims.UserID,
+				claims.SessionID,
+				claims.ID,
+				newRefreshState,
+				s.jwtMgr.RefreshTTL(),
+			)
+		},
+	)
 	if err != nil {
 		zap.L().Error("failed to refresh token",
-			zap.Uint64("user_id", userID),
+			zap.Uint64("user_id", claims.UserID),
 			zap.Error(err))
 		return nil, err
 	}
 
 	// 返回新的 Token 响应
 	return &dto.RefreshTokenResp{
-		AccessToken: accessToken,
-		// RefreshToken: refreshToken,
-		TokenType: "Bearer",
-		ExpiresIn: expiresIn,
+		AccessToken:  accessToken,
+		RefreshToken: refreshToken,
+		TokenType:    constTokenType,
+		ExpiresIn:    expiresIn,
 	}, nil
+}
+
+// UserRepository 认证模块使用的 用户仓储接口
+type UserRepository interface {
+	// 创建用户
+	Create(ctx context.Context, user *model.User) error
+
+	// 根据 ID 查询用户
+	GetByID(ctx context.Context, id uint64) (*model.User, error)
+
+	// 根据 Account 查询用户（用户名或邮箱）
+	GetByAccount(ctx context.Context, account string) (*model.User, error)
+
+	// 检查用户名是否存在
+	ExistsByUsername(ctx context.Context, username string) (bool, error)
+
+	// 检查邮箱是否存在
+	ExistsByEmail(ctx context.Context, email string) (bool, error)
+
+	// 更新最后登录时间 在用户登录退出口调用
+	UpdateLastLoginAtWithTx(ctx context.Context, tx *gorm.DB, userID uint64, loginAt time.Time) error
+}
+
+// AuthStoreInvoker 认证模块使用的 Redis 登录状态管理接口
+type AuthStoreInvoker interface {
+	LoginSession(
+		ctx context.Context,
+		session *redispkg.AuthSession,
+		refresh *redispkg.RefreshTokenState,
+		ttl time.Duration,
+	) error
+	RotateRefreshToken(
+		ctx context.Context,
+		userID uint64,
+		sessionID string,
+		oldRefreshJTI string,
+		newRefresh *redispkg.RefreshTokenState,
+		ttl time.Duration,
+	) error
+	LogoutSession(
+		ctx context.Context,
+		userID uint64,
+		sessionID string,
+		accessJTI string,
+		accessTTL time.Duration,
+	) error
 }

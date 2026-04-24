@@ -15,34 +15,13 @@ var (
 	ErrUserNotFound = errors.New("user not found") // 用户未找到错误消息
 )
 
-// UserRepository 用户仓储接口
-type UserRepository interface {
-	// 创建用户
-	Create(ctx context.Context, user *model.User) error
-
-	// 根据 ID 查询用户
-	GetByID(ctx context.Context, id uint64) (*model.User, error)
-
-	// 根据 Account 查询用户（用户名或邮箱）
-	GetByAccount(ctx context.Context, account string) (*model.User, error)
-
-	// 检查用户名是否存在
-	ExistsByUsername(ctx context.Context, username string) (bool, error)
-
-	// 检查邮箱是否存在
-	ExistsByEmail(ctx context.Context, email string) (bool, error)
-
-	// 更新最后登录时间 在用户登录退出口调用
-	UpdateLastLoginAtWithTx(ctx context.Context, tx *gorm.DB, userID uint64, loginAt time.Time) error
-}
-
 // userRepository 用户仓储实现
 type userRepository struct {
 	db *gorm.DB
 }
 
 // NewUserRepository 创建用户仓储
-func NewUserRepository(db *gorm.DB) UserRepository {
+func NewUserRepository(db *gorm.DB) *userRepository {
 	return &userRepository{db: db}
 }
 

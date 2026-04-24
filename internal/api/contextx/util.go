@@ -1,19 +1,18 @@
 // Package contextx 提供了用于在 Gin 上下文中存储和获取用户信息的工具函数。
 package contextx
 
-import "github.com/gin-gonic/gin"
+import (
+	jwtpkg "smart-task-platform/internal/pkg/jwt"
 
-const (
-	CtxUserIDKey   = "user_id"
-	CtxUsernameKey = "username"
+	"github.com/gin-gonic/gin"
 )
 
-// SetUserClaims 写入用户信息到上下文 利用 JWT 鉴权中间件解析 Token 后调用该函数将用户信息存储到上下文中
-// 便于后续处理器和业务逻辑层获取当前登录用户的信息
-func SetUserClaims(c *gin.Context, userID uint64, username string) {
-	c.Set(CtxUserIDKey, userID)
-	c.Set(CtxUsernameKey, username)
-}
+const (
+	CtxUserIDKey    = "user_id"
+	CtxUsernameKey  = "username"
+	CtxSessionIDKey = "session_id"
+	CtxClaimsKey    = "claims"
+)
 
 // GetUserID 获取当前登录用户 ID
 func GetUserID(c *gin.Context) uint64 {
@@ -43,4 +42,30 @@ func GetUsername(c *gin.Context) string {
 	}
 
 	return username
+}
+
+// GetSesssionID 获取当前会话ID
+func GetSessionID(c *gin.Context) string {
+	v, ok := c.Get(CtxSessionIDKey)
+	if !ok {
+		return ""
+	}
+	sessionID, ok := v.(string)
+	if !ok {
+		return ""
+	}
+	return sessionID
+}
+
+// GetClaims 获取自定义 JWT Claims
+func GetClaims(c *gin.Context) *jwtpkg.Claims {
+	v, ok := c.Get(CtxClaimsKey)
+	if !ok {
+		return nil
+	}
+	claims, ok := v.(*jwtpkg.Claims)
+	if !ok {
+		return nil
+	}
+	return claims
 }

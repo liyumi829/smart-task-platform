@@ -98,6 +98,8 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		// 用户被禁用
 		case errors.Is(err, service.ErrUserDisabled):
 			response.Fail(c, errmsg.UserDisabled)
+		case errors.Is(err, service.ErrOperationTooFrequent):
+			response.FailWithMessage(c, errmsg.TooManyRequest, "operation is too frequent, please try again later")
 		// 其他错误
 		default:
 			zap.L().Error("failed to login user",
@@ -112,14 +114,14 @@ func (h *AuthHandler) Login(c *gin.Context) {
 
 // Logout 退出登录 需要携带 Token
 func (h *AuthHandler) Logout(c *gin.Context) {
-	userID := contextx.GetUserID(c) // 从上下文中获取用户ID
-	if userID == 0 {
+	claims := contextx.GetClaims(c)
+	if claims.UserID == 0 {
 		zap.L().Warn("unauthorized access to current user info")
 		response.Fail(c, errmsg.Unauthorized) // 用户未登录或无效的用户ID
 		return
 	}
 
-	resp, err := h.authService.Logout(c.Request.Context(), userID)
+	resp, err := h.authService.Logout(c.Request.Context(), claims)
 	if err != nil {
 		zap.L().Error("failed to logout user",
 			zap.Error(err))

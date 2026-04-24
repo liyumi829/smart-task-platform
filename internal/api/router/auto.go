@@ -1,5 +1,5 @@
 // Package router 负责自动注册 API 路由，减少手动维护路由的工作量。
-// auto 模块的路由注册函数会被 main.go 调用，确保所有认证相关的 API 都正确注册到 Gin 路由中。
+// auth 模块的路由注册函数会被 main.go 调用，确保所有认证相关的 API 都正确注册到 Gin 路由中。
 package router
 
 import (
@@ -8,6 +8,7 @@ import (
 	"smart-task-platform/internal/api/handler"
 	"smart-task-platform/internal/api/middleware"
 	authjwt "smart-task-platform/internal/pkg/jwt"
+	authredis "smart-task-platform/internal/pkg/redis"
 )
 
 // RegisterAuthRoutes 注册认证模块路由
@@ -15,6 +16,7 @@ func RegisterAuthRoutes(
 	api *gin.RouterGroup,
 	authHandler *handler.AuthHandler,
 	jwtMgr *authjwt.Manager,
+	authStore *authredis.RedisAuthStore,
 ) {
 	auth := api.Group("/auth")
 	{
@@ -24,7 +26,7 @@ func RegisterAuthRoutes(
 		auth.POST("/refresh", authHandler.RefreshToken) // 	刷新 Token
 
 		// 登录成功 需要携带 Token 访问以下接口
-		auth.GET("/me", middleware.JWTAuth(jwtMgr), authHandler.Me)          // 获取当前用户信息
-		auth.POST("/logout", middleware.JWTAuth(jwtMgr), authHandler.Logout) // 退出登录
+		auth.GET("/me", middleware.JWTAuth(jwtMgr, authStore), authHandler.Me)          // 获取当前用户信息
+		auth.POST("/logout", middleware.JWTAuth(jwtMgr, authStore), authHandler.Logout) // 退出登录
 	}
 }

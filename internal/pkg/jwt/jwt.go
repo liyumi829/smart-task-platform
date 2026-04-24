@@ -22,6 +22,12 @@ type Claims struct {
 	// 用户名
 	Username string `json:"username"`
 
+	// 会话ID
+	SessionID string `json:"session_id"`
+
+	// token 的类型
+	TokenType string `json:"token_type"` // token 类型：access / refresh
+
 	// 内嵌标准注册声明
 	jwtv5.RegisteredClaims
 }
@@ -44,22 +50,25 @@ func NewManager(secret, issuer string, expireAccess time.Duration, expireRefresh
 	}
 }
 
-// generateAccessToken 生成访问 Token
-func (m *Manager) generateAccessToken(userID uint64, username string) (string, int64, error) {
+// GenerateAccessToken 生成访问 Token
+func (m *Manager) GenerateAccessToken(userID uint64, username, sessionID, jti string) (string, int64, error) {
 	now := time.Now()                // 获取现在的时间
 	expAt := now.Add(m.expireAccess) // 过期时间点
 
 	claims := Claims{
-		UserID:   userID,
-		Username: username,
+		UserID:    userID,
+		Username:  username,
+		SessionID: sessionID,
+		TokenType: "access",
 		RegisteredClaims: jwtv5.RegisteredClaims{
 			Issuer:    m.issuer,
 			Subject:   username,
 			IssuedAt:  jwtv5.NewNumericDate(now),
 			ExpiresAt: jwtv5.NewNumericDate(expAt),
 			NotBefore: jwtv5.NewNumericDate(now),
+			ID:        jti,
 		},
-	} // 构造 Claims 对象，设置用户 ID、用户名和标准注册声明
+	} // 构造 Claims 对象，设置用户 ID、用户名等和标准注册声明
 
 	// 创建新的 JWT Token，使用 HS256 签名方法和自定义 Claims
 	token := jwtv5.NewWithClaims(jwtv5.SigningMethodHS256, claims)
@@ -71,20 +80,23 @@ func (m *Manager) generateAccessToken(userID uint64, username string) (string, i
 	return signed, int64(m.expireAccess.Seconds()), nil
 }
 
-// generateRefreshToken 生成刷新 Token
-func (m *Manager) generateRefreshToken(userID uint64, username string) (string, int64, error) {
+// GenerateRefreshToken 生成刷新 Token
+func (m *Manager) GenerateRefreshToken(userID uint64, username, sessionID, jti string) (string, int64, error) {
 	now := time.Now()                 // 获取现在的时间
 	expAt := now.Add(m.expireRefresh) // 过期时间点
 
 	claims := Claims{
-		UserID:   userID,
-		Username: username,
+		UserID:    userID,
+		Username:  username,
+		SessionID: sessionID,
+		TokenType: "refresh",
 		RegisteredClaims: jwtv5.RegisteredClaims{
 			Issuer:    m.issuer,
 			Subject:   username,
 			IssuedAt:  jwtv5.NewNumericDate(now),
 			ExpiresAt: jwtv5.NewNumericDate(expAt),
 			NotBefore: jwtv5.NewNumericDate(now),
+			ID:        jti,
 		},
 	} // 构造 Claims 对象，设置用户 ID、用户名和标准注册声明
 
@@ -98,16 +110,18 @@ func (m *Manager) generateRefreshToken(userID uint64, username string) (string, 
 	return signed, int64(m.expireRefresh.Seconds()), nil
 }
 
-// GenerateToken 同时生成访问 Token 和刷新 Token
-func (m *Manager) GenerateToken(userID uint64, username string) (string, string, int64, error) {
-	accessToken, expiresIn, err := m.generateAccessToken(userID, username) // 生成访问 Token
+// GenerateTokenPair 同时生成 access token 和 refresh token
+func (m *Manager) GenerateTokenPair(userID uint64, username, sessionID, accessJTI, refreshJTI string) (string, string, int64, error) {
+	accessToken, expiresIn, err := m.GenerateAccessToken(userID, username, sessionID, accessJTI)
 	if err != nil {
 		return "", "", 0, err
 	}
-	refreshToken, _, err := m.generateRefreshToken(userID, username) // 生成刷新 Token
+
+	refreshToken, _, err := m.GenerateRefreshToken(userID, username, sessionID, refreshJTI)
 	if err != nil {
 		return "", "", 0, err
 	}
+
 	return accessToken, refreshToken, expiresIn, nil
 }
 
@@ -125,11 +139,17 @@ func (m *Manager) ParseToken(tokenString string) (*Claims, error) {
 		})
 	if err != nil {
 		// 解析失败区别对待过期错误和其他错误，提供更具体的错误信息
-		if errors.Is(err, jwtv5.ErrTokenExpired) {
+		switch {
+		// 超时
+		case errors.Is(err, jwtv5.ErrTokenExpired):
 			return nil, ExpiredTokenError
+		// 错误的前面方法
+		case errors.Is(err, InvalidSigningMethodError):
+			return nil, InvalidSigningMethodError
+		// 其它错误
+		default:
+			return nil, InvalidTokenError
 		}
-		// 其他错误
-		return nil, InvalidTokenError
 	}
 	// 将解析后的 Claims 转换为自定义的 Claims 结构体，并验证 Token 是否有效
 	claims, ok := token.Claims.(*Claims)
@@ -138,4 +158,14 @@ func (m *Manager) ParseToken(tokenString string) (*Claims, error) {
 	}
 
 	return claims, nil
+}
+
+// AccessTTL 返回 access token 生命周期
+func (m *Manager) AccessTTL() time.Duration {
+	return m.expireAccess
+}
+
+// RefreshTTL 返回 refresh token 生命周期
+func (m *Manager) RefreshTTL() time.Duration {
+	return m.expireRefresh
 }

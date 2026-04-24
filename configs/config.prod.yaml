@@ -57,3 +57,14 @@ log:
   max_backups: 30
   # 最多保存的天数
   max_age: 7
+
+# JWT 配置
+jwt:
+  # JWT 密钥
+  secret_key: "your_secret_key"
+  # JWT 签发者
+  issuer: "smart_task_platform"
+  # JWT 过期时间，单位: s
+  access_token_ttl: 3600
+  # JWT 刷新过期时间，单位: s
+  refresh_token_ttl: 604800
