@@ -27,7 +27,7 @@ func main() {
 	log.Printf("config file: %s", *configFile)
 	cfg, err := bootstrap.InitConfig(*configFile)
 	if err != nil {
-		fmt.Printf("Failed to initialize configuration, error: %w", err)
+		fmt.Printf("Failed to initialize configuration, error: %v", err)
 		return
 	}
 
@@ -61,9 +61,11 @@ func main() {
 
 	// 初始化服务
 	authService := service.NewAuthService(txManager, userRepo, authStore, jwtManager) // 鉴权服务
+	userService := service.NewUserService(txManager, userRepo)                        // 用户服务
 
 	// 初始化 Handler
 	authHandler := handler.NewAuthHandler(authService) // 鉴权 Handler
+	userHandler := handler.NewUserHandler(userService) // 用户 Handler
 
 	// 初始化 Gin
 	r := gin.New()
@@ -80,7 +82,7 @@ func main() {
 	}
 
 	// 注册路由
-	router.Register(r, authHandler, jwtManager, authStore)
+	router.Register(r, authHandler, userHandler, jwtManager, authStore)
 
 	// 启动服务
 	addr := net.JoinHostPort(*host, *port)

@@ -258,7 +258,12 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 		// 过期的令牌
 		case errors.Is(err, service.ErrExpiredToken):
 			logger.Warn("refresh token rejected: expired token")
-			response.Fail(c, errmsg.RefreshTokenExpired)
+			response.FailWithMessage(c, errmsg.RefreshTokenExpired, "Please log in again")
+
+		// 会话不存在
+		case errors.Is(err, service.ErrSessionNotExists):
+			logger.Info("refresh token rejected: user logout")
+			response.FailWithMessage(c, errmsg.Unauthorized, "Please log in again")
 
 		default:
 			logger.Error("refresh token failed",

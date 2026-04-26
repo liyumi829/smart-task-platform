@@ -12,6 +12,21 @@ const (
 	UserStatusDisabled = "disabled" // 用户状态：禁用
 )
 
+const (
+	UserTableName         = "users"         // 表名
+	UserColumnID          = "id"            // 主键ID
+	UserColumnUsername    = "username"      // 用户名
+	UserColumnEmail       = "email"         // 邮箱
+	UserColumnPassword    = "password_hash" // 密码哈希
+	UserColumnNickname    = "nickname"      // 昵称
+	UserColumnAvatar      = "avatar"        // 头像
+	UserColumnStatus      = "status"        // 状态
+	UserColumnLastLoginAt = "last_login_at" // 最后登录时间
+	UserColumnCreatedAt   = "created_at"    // 创建时间
+	UserColumnUpdatedAt   = "updated_at"    // 更新时间
+	UserColumnDeletedAt   = "deleted_at"    // 软删除
+)
+
 // User 用户模型
 type User struct {
 	//主键

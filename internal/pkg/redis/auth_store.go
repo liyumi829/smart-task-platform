@@ -257,8 +257,8 @@ func (s *RedisAuthStore) RotateRefreshToken(
 
 // LogoutSession 原子退出登录
 // 用于 logout 接口：
-// 1. 拉黑当前 access token
-// 2. 当 session_id 匹配时删除 session 与 refresh
+//  1. 拉黑当前 access token
+//  2. 当 session_id 匹配时删除 session 与 refresh
 func (s *RedisAuthStore) LogoutSession(
 	ctx context.Context,
 	userID uint64,
@@ -303,4 +303,53 @@ func (s *RedisAuthStore) LogoutSession(
 			})
 		return err
 	}, sessionKey)
+}
+
+// ValidateRefreshSession 校验 refresh token 是否仍属于当前有效会话
+// 用于 refresh 接口前置校验：
+//  1. 判断当前 session 是否存在
+//  2. 判断 refresh 中记录的 session_id 是否与当前活跃 session 一致
+//  3. 判断 refresh 中记录的 jti 是否仍是当前 session 绑定的 refresh_jti
+func (s *RedisAuthStore) ValidateRefreshSession(
+	ctx context.Context,
+	userID uint64,
+	sessionID string,
+	refreshJTI string,
+) error {
+	// 参数校验
+	if userID == 0 || sessionID == "" || refreshJTI == "" {
+		return ErrInvalidArgument
+	}
+
+	sessionKey := s.sessionKey(userID)
+
+	// 只需要检查当前 session 是否存在且匹配即可。
+	// 因为单设备登录场景下，session 中的 refresh_jti 就代表当前唯一有效 refresh。
+	sessionValue, err := s.rdb.HGetAll(ctx, sessionKey).Result()
+	if err != nil {
+		return err
+	}
+
+	// 当前会话不存在，说明用户已经退出登录或会话已过期。
+	if len(sessionValue) == 0 {
+		return ErrSessionNotFound
+	}
+
+	// 校验 session 是否属于当前用户。
+	if sessionValue[constUserID] != strconv.FormatUint(userID, 10) {
+		return ErrSessionMismatch
+	}
+
+	// 校验 refresh token 中携带的 session_id 是否仍是当前活跃会话。
+	if sessionValue[constSessionID] != sessionID {
+		return ErrSessionMismatch
+	}
+
+	// 校验 refresh token 的 jti 是否仍是当前会话绑定的 refresh_jti。
+	// 如果不一致，说明该 refresh 已被轮转或已失效。
+	if sessionValue[constRefreshJTI] != refreshJTI {
+		return ErrSessionMismatch
+	}
+
+	return nil
 }

@@ -18,17 +18,23 @@ type UserPublicProfile struct {
 	Avatar   string `json:"avatar,omitempty"` // 头像
 }
 
+const (
+	MinPageSize = 10
+	MaxPageSize = 50
+)
+
+// PageQuery 通用分页查询参数
+type PageQuery struct {
+	Page     int `form:"page" binding:"omitempty,min=1"`              // 页码
+	PageSize int `form:"page_size" binding:"omitempty,min=1,max=100"` // 每页数量
+}
+
 // EmptyResp 空响应占位结构
 type EmptyResp struct{}
 
 // IDUri 通用资源 ID 路径参数
 type IDUri struct {
 	ID uint64 `uri:"id" binding:"required,min=1"` // 资源 ID
-}
-
-// UserIDUri 用户 ID 路径参数
-type UserIDUri struct {
-	UserID uint64 `uri:"userId" binding:"required,min=1"` // 用户 ID
 }
 
 // TagIDUri 标签 ID 路径参数

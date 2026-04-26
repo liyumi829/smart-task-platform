@@ -116,7 +116,7 @@ func (m *mockAuthUserRepository) seedUser(
 		Status:       status,
 	}
 
-	require.NoError(t, m.Create(context.Background(), user))
+	require.NoError(t, m.Create(context.Background(), &gorm.DB{}, user))
 
 	t.Logf(
 		"[mock seed user] id=%d username=%s email=%s status=%v",
@@ -130,7 +130,7 @@ func (m *mockAuthUserRepository) seedUser(
 }
 
 // Create 创建用户。
-func (m *mockAuthUserRepository) Create(ctx context.Context, user *model.User) error {
+func (m *mockAuthUserRepository) Create(ctx context.Context, tx *gorm.DB, user *model.User) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 

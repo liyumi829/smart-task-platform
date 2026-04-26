@@ -62,3 +62,26 @@ func IsValidNickname(nickname string) bool {
 	}
 	return regexp.MustCompile(`^[a-zA-Z0-9_\p{Han}]+$`).MatchString(nickname)
 }
+
+// IsValidAvatarURL 检查头像 URL 是否符合要求
+func IsValidAvatarURL(avatar string) bool {
+	// 1. 长度校验：不能为空，且不超过 255 字符
+	if len(avatar) == 0 || len(avatar) > 255 {
+		return false
+	}
+
+	// 2. 不允许包含任何空白字符
+	if regexp.MustCompile(`\s`).MatchString(avatar) {
+		return false
+	}
+
+	// 3. 必须以 http:// 或 https:// 开头（严谨正则）
+	// ^https?:// s? 可以有 s 也可以没有（https /http）
+	if !regexp.MustCompile(`^https?://`).MatchString(avatar) {
+		return false
+	}
+
+	// 4. 合法 URL 格式校验（宽松、安全、通用）
+	pattern := regexp.MustCompile(`^https?://[-a-zA-Z0-9+&@#/%?=~_|!:,.;]*[-a-zA-Z0-9+&@#/%=~_|]$`)
+	return pattern.MatchString(avatar)
+}
