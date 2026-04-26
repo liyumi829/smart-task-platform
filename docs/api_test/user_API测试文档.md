@@ -245,7 +245,7 @@ GET /api/v1/users/abc
 
 - **接口名称**：更新当前用户资料
 - **请求方式**：`PUT`
-- **请求路径**：`/api/v1/users/profile`
+- **请求路径**：`/api/v1/users/me`
 
 ### 请求头
 
@@ -381,8 +381,8 @@ Authorization: Bearer invalid_token
 ### 接口信息
 
 - **接口名称**：修改当前用户密码
-- **请求方式**：`PUT`
-- **请求路径**：`/api/v1/users/password`
+- **请求方式**：`PATCH`
+- **请求路径**：`/api/v1/users/me/password`
 
 ### 请求头
 
@@ -530,7 +530,7 @@ Authorization: Bearer invalid_token
 
 - **接口名称**：搜索用户列表
 - **请求方式**：`GET`
-- **请求路径**：`/api/v1/users/list`
+- **请求路径**：`/api/v1/users`
 
 ### 请求头
 
