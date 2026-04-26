@@ -21,16 +21,22 @@ func RegisterUserRoutes(
 	// 路由分组：/users
 	userGroup := api.Group("/users")
 	{
-		// 公开接口（无需登录）
+		// 公开接口 无需登录
+		// 获取任意用户公开信息
 		userGroup.GET("/:id", userHandler.GetUserPublicInfo)
-		userGroup.GET("/list", userHandler.ListUsers)
 
-		// 私有接口（需要登录鉴权）
-		privateGroup := userGroup.Group("")
-		privateGroup.Use(middleware.JWTAuth(jwtManager, authStore)) // 使用中间件
+		// 获取用户公开列表
+		userGroup.GET("", userHandler.ListUsers)
+
+		// 私有接口
+		privateUserGroup := userGroup.Group("/me")
+		privateUserGroup.Use(middleware.JWTAuth(jwtManager, authStore))
 		{
-			privateGroup.PUT("/profile", userHandler.UpdateUserProfile)
-			privateGroup.PUT("/password", userHandler.UpdateUserPassword)
+			// 修改自己的资料
+			privateUserGroup.PUT("", userHandler.UpdateUserProfile)
+
+			// 修改的密码
+			privateUserGroup.PATCH("/password", userHandler.UpdateUserPassword)
 		}
 	}
 }
