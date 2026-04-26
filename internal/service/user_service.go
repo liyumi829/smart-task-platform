@@ -16,20 +16,20 @@ import (
 	"gorm.io/gorm"
 )
 
-// UserService 认证服务
+// UserService 用户服务
 type UserService struct {
-	txMgr    *repository.TxManager // 事务管理器
-	userRepo UserUserRepository    // 用户仓库接口
+	txMgr *repository.TxManager // 事务管理器
+	ur    userSvcUserRepo       // 用户仓库接口
 }
 
 // NewAuthService 创建用户服务
 func NewUserService(
 	txMgr *repository.TxManager,
-	userRepo UserUserRepository,
+	userRepo userSvcUserRepo,
 ) *UserService {
 	return &UserService{
-		txMgr:    txMgr,
-		userRepo: userRepo,
+		txMgr: txMgr,
+		ur:    userRepo,
 	}
 }
 
@@ -47,7 +47,7 @@ func (s *UserService) UpdateUserProfile(ctx context.Context, userID uint64, nick
 	}
 
 	// 先搜索获取用户信息
-	user, err := s.userRepo.GetByID(ctx, userID)
+	user, err := s.ur.GetByID(ctx, userID)
 	if err != nil {
 		if errors.Is(err, repository.ErrUserNotFound) {
 			zap.L().Warn("user not found when updating profile",
@@ -84,6 +84,7 @@ func (s *UserService) UpdateUserProfile(ctx context.Context, userID uint64, nick
 		}, nil
 	}
 	// 获取新昵称，避免空字符串注入
+	// 和其它不同的是 user 在上层业务层就做了参数检验
 	newNickname := user.Nickname
 	newAvatar := user.Avatar
 	if nickname != "" {
@@ -95,7 +96,7 @@ func (s *UserService) UpdateUserProfile(ctx context.Context, userID uint64, nick
 
 	// 使用事务更新用户个人资料
 	err = s.txMgr.Transaction(ctx, func(tx *gorm.DB) error {
-		if err := s.userRepo.UpdateUserProfileWithTx(
+		if err := s.ur.UpdateUserProfileWithTx(
 			ctx,
 			tx,
 			userID,
@@ -146,7 +147,7 @@ func (s *UserService) UpdateUserPassword(ctx context.Context, userID uint64, old
 	}
 
 	// 获取用户信息
-	user, err := s.userRepo.GetByID(ctx, userID) // 获取到用户信息
+	user, err := s.ur.GetByID(ctx, userID) // 获取到用户信息
 	if err != nil {
 		if errors.Is(err, repository.ErrUserNotFound) {
 			zap.L().Warn("user not found when updating password",
@@ -198,7 +199,7 @@ func (s *UserService) UpdateUserPassword(ctx context.Context, userID uint64, old
 
 	err = s.txMgr.Transaction(ctx,
 		func(tx *gorm.DB) error {
-			if err := s.userRepo.UpdateUserPasswordWithTx(ctx, tx, userID, newPasswordHash); err != nil {
+			if err := s.ur.UpdateUserPasswordWithTx(ctx, tx, userID, newPasswordHash); err != nil {
 				zap.L().Error("fail to update user password with tx",
 					zap.Uint64("user_id", userID),
 					zap.Error(err),
@@ -225,7 +226,7 @@ func (s *UserService) UpdateUserPassword(ctx context.Context, userID uint64, old
 // GetUserPublicInfo 获取用户公开信息
 func (s *UserService) GetUserPublicInfo(ctx context.Context, targetUserID uint64) (*dto.UserPublicProfileResp, error) {
 	// 获取用户信息
-	user, err := s.userRepo.GetByID(ctx, targetUserID) // 获取到用户信息
+	user, err := s.ur.GetByID(ctx, targetUserID) // 获取到用户信息
 	if err != nil {
 		if errors.Is(err, repository.ErrUserNotFound) {
 			zap.L().Warn("user not found when getting public user info",
@@ -259,15 +260,7 @@ func (s *UserService) ListUsers(ctx context.Context, page, pageSize int, key str
 	// 参数检查。
 	keyword := strings.TrimSpace(key) // 清理关键字空格
 	if keyword == "" {
-		if page <= 0 {
-			page = 1
-		}
-		if pageSize <= 0 {
-			pageSize = dto.MinPageSize
-		}
-		if pageSize > dto.MaxPageSize {
-			pageSize = dto.MaxPageSize
-		}
+		page, pageSize = fixPageParams(page, pageSize)
 
 		zap.L().Info("skip search user list because keyword is empty",
 			zap.Int("page", page),
@@ -278,24 +271,14 @@ func (s *UserService) ListUsers(ctx context.Context, page, pageSize int, key str
 			List:     []*dto.UserSearchItem{},
 			Total:    0,
 			Page:     page,
-			PageSize: 0,
+			PageSize: pageSize,
 		}, nil // 不做查询，防止全量查询
 	}
-
-	// 分页参数兜底。
-	if page <= 0 {
-		page = 1
-	}
-	if pageSize <= 0 {
-		pageSize = dto.MinPageSize
-	}
-	if pageSize > dto.MaxPageSize {
-		pageSize = dto.MaxPageSize
-	}
+	page, pageSize = fixPageParams(page, pageSize) // 分页参数兜底。
 
 	// 参数校验完成
 	// 开始搜索用户：
-	users, total, err := s.userRepo.SearchUsers(ctx, &repository.UserSearchQuery{
+	users, total, err := s.ur.SearchUsers(ctx, &repository.UserSearchQuery{
 		Keyword:  keyword,
 		Page:     page,
 		PageSize: pageSize,
@@ -326,7 +309,7 @@ func (s *UserService) ListUsers(ctx context.Context, page, pageSize int, key str
 	zap.L().Info("search user list successfully",
 		zap.String("keyword", keyword),
 		zap.Int("page", page),
-		zap.Int("page_size", pageSize),
+		zap.Int("page_size", len(userItems)),
 		zap.Int64("total", total),
 	)
 
@@ -334,12 +317,12 @@ func (s *UserService) ListUsers(ctx context.Context, page, pageSize int, key str
 		List:     userItems,
 		Total:    int(total),
 		Page:     page,
-		PageSize: len(userItems),
+		PageSize: pageSize,
 	}, nil
 }
 
-// UserUserRepository 用户服务使用的仓储操作
-type UserUserRepository interface {
+// userSvcUserRepo 用户服务使用的仓储操作
+type userSvcUserRepo interface {
 	GetByID(ctx context.Context, id uint64) (*model.User, error)                                                   // 获取用户
 	UpdateUserProfileWithTx(ctx context.Context, tx *gorm.DB, userID uint64, nickname string, avatar string) error // 更新个人资料
 	UpdateUserPasswordWithTx(ctx context.Context, tx *gorm.DB, userID uint64, password string) error               // 更新密码

@@ -33,14 +33,14 @@ func (r *userRepository) Create(ctx context.Context, tx *gorm.DB, user *model.Us
 		return errors.New("user is nil")
 	}
 
-	return tx.WithContext(ctx).
+	return getDB(ctx, r.db, tx).
 		Create(user).Error
 }
 
 // GetByID 根据 ID 查询用户
 func (r *userRepository) GetByID(ctx context.Context, id uint64) (*model.User, error) {
 	var user model.User
-	err := r.db.WithContext(ctx).
+	err := getDB(ctx, r.db, nil).
 		Where(model.UserColumnID+" = ?", id).
 		First(&user).Error
 	if err != nil {
@@ -57,7 +57,7 @@ func (r *userRepository) GetByID(ctx context.Context, id uint64) (*model.User, e
 // GetByAccount 根据用户名或邮箱查询用户
 func (r *userRepository) GetByAccount(ctx context.Context, account string) (*model.User, error) {
 	var user model.User
-	err := r.db.WithContext(ctx).
+	err := getDB(ctx, r.db, nil).
 		Where(
 			r.db.Where(model.UserColumnUsername, account).
 				Or(model.UserColumnEmail, account),
@@ -76,7 +76,7 @@ func (r *userRepository) GetByAccount(ctx context.Context, account string) (*mod
 // ExistsByUsername 检查用户名是否存在
 func (r *userRepository) ExistsByUsername(ctx context.Context, username string) (bool, error) {
 	var count int64
-	err := r.db.WithContext(ctx).
+	err := getDB(ctx, r.db, nil).
 		Model(&model.User{}).
 		Where(model.UserColumnUsername+" = ?", username).
 		Count(&count).Error
@@ -90,7 +90,7 @@ func (r *userRepository) ExistsByUsername(ctx context.Context, username string) 
 // ExistsByEmail 检查邮箱是否存在
 func (r *userRepository) ExistsByEmail(ctx context.Context, email string) (bool, error) {
 	var count int64
-	err := r.db.WithContext(ctx).
+	err := getDB(ctx, r.db, nil).
 		Model(&model.User{}).
 		Where("email = ?", email).
 		Count(&count).Error
@@ -103,7 +103,7 @@ func (r *userRepository) ExistsByEmail(ctx context.Context, email string) (bool,
 
 // UpdateLastLoginAtWithTx 事务更新最后登录时间
 func (r *userRepository) UpdateLastLoginAtWithTx(ctx context.Context, tx *gorm.DB, userID uint64, loginAt time.Time) error {
-	return tx.WithContext(ctx).
+	return getDB(ctx, r.db, tx).
 		Model(&model.User{}).
 		Where(model.UserColumnID+" = ?", userID).
 		Update(model.UserColumnLastLoginAt, loginAt).Error
@@ -117,15 +117,22 @@ func (r *userRepository) UpdateUserProfileWithTx(
 	nickname string,
 	avatar string,
 ) error {
-	return tx.WithContext(ctx).
+
+	updates := map[string]interface{}{
+		model.UserColumnUpdatedAt: time.Now(),
+	}
+
+	if nickname != "" {
+		updates[model.UserColumnNickname] = nickname
+	}
+	if avatar != "" {
+		updates[model.UserColumnAvatar] = avatar
+	}
+
+	return getDB(ctx, r.db, tx).
 		Model(&model.User{}).
 		Where(model.UserColumnID+" = ?", userID).
-		Updates(map[string]any{
-			model.UserColumnNickname:  nickname,
-			model.UserColumnAvatar:    avatar,
-			model.UserColumnUpdatedAt: time.Now(),
-		}).
-		Error
+		Updates(updates).Error
 }
 
 // UpdateUserPasswordWithTx 事务修改用户的密码
@@ -139,7 +146,7 @@ func (r *userRepository) UpdateUserPasswordWithTx(
 		return ErrPasswordIsEmpty // 返回密码为空的错误
 	}
 
-	return tx.WithContext(ctx).
+	return getDB(ctx, r.db, tx).
 		Model(&model.User{}).
 		Where(model.UserColumnID+" = ?", userID).
 		Updates(map[string]interface{}{
@@ -174,7 +181,7 @@ func (r *userRepository) SearchUsers(ctx context.Context, query *UserSearchQuery
 	offset := (page - 1) * pageSize    // 偏移量
 	likePattern := query.Keyword + "%" // 模糊匹配关键词 key%
 
-	db := r.db.WithContext(ctx).
+	db := getDB(ctx, r.db, nil).
 		Model(&model.User{}).
 		Where(model.UserColumnStatus, model.UserStatusActive).
 		Where(model.UserColumnUsername+" LIKE ?", likePattern)

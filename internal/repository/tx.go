@@ -28,3 +28,13 @@ func (m *TxManager) Transaction(ctx context.Context, fn func(tx *gorm.DB) error)
 				return fn(tx)
 			})
 }
+
+// getDB 通用获取DB实例
+// 优先使用事务 tx，不存在则使用默认 db
+// 自动带上 ctx
+func getDB(ctx context.Context, db *gorm.DB, tx *gorm.DB) *gorm.DB {
+	if tx != nil {
+		return tx.WithContext(ctx)
+	}
+	return db.WithContext(ctx)
+}
