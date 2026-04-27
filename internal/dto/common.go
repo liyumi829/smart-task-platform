@@ -42,11 +42,6 @@ type TagIDUri struct {
 	TagID uint64 `uri:"tagId" binding:"required,min=1"` // 标签 ID
 }
 
-// ProjectIDUri 项目 ID 路径参数
-type ProjectIDUri struct {
-	ID uint64 `uri:"id" binding:"required,min=1"` // 项目 ID
-}
-
 // TaskIDUri 任务 ID 路径参数
 type TaskIDUri struct {
 	ID uint64 `uri:"id" binding:"required,min=1"` // 任务 ID

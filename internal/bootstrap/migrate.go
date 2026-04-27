@@ -23,6 +23,8 @@ func AutoMigrate(db *gorm.DB) error {
 	// 按依赖顺序迁移
 	if err := db.AutoMigrate(
 		&model.User{},
+		&model.Project{},
+		&model.ProjectMember{},
 	); err != nil {
 		zap.L().Error("AutoMigrate failed", zap.Error(err))
 		return fmt.Errorf("auto migrate failed: %w", err)

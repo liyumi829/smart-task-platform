@@ -85,3 +85,24 @@ func IsValidAvatarURL(avatar string) bool {
 	pattern := regexp.MustCompile(`^https?://[-a-zA-Z0-9+&@#/%?=~_|!:,.;]*[-a-zA-Z0-9+&@#/%=~_|]$`)
 	return pattern.MatchString(avatar)
 }
+
+// IsValidProjectName 检查项目名称是否符合要求
+// 规则：
+//  1. 长度：4 ~ 20 个 utf-8 字符（rune）
+//  2. 首字符：只能是 英文 / 汉字
+//  3. 允许字符：英文、数字、汉字、下划线
+func IsValidProjectName(name string) bool {
+	// 1. 长度校验：4 ~ 20 个 rune
+	nameLen := utf8.RuneCountInString(name)
+	if nameLen < 4 || nameLen > 20 {
+		return false
+	}
+
+	// 2. 完整正则：首字符必须是英文/汉字，后面允许英文/数字/汉字/下划线
+	// ^ 开头
+	// [a-zA-Z\p{Han}] 首字符：英文、汉字
+	// [a-zA-Z0-9_\p{Han}]* 后续字符：英文、数字、下划线、汉字
+	// $ 结尾
+	reg := regexp.MustCompile(`^[a-zA-Z\p{Han}][a-zA-Z0-9_\p{Han}]*$`)
+	return reg.MatchString(name)
+}
