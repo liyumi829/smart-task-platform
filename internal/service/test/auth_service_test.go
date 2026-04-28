@@ -2,11 +2,11 @@
 //  1. 不连接真实 MySQL，不连接真实 Redis。
 //  2. Redis 使用 miniredis，测试结束自动销毁，不污染真实 Redis。
 //  3. UserRepository 使用内存 mock，不污染真实数据库。
-//  4. AuthService.Login 依赖 repository.TxManager，因此测试使用 sqlite 内存数据库构造 TxManager。
+//  4. service.AuthService.Login 依赖 repository.TxManager，因此测试使用 sqlite 内存数据库构造 TxManager。
 //  5. 测试覆盖：注册、登录、Me、刷新 Token、退出登录、并发登录、异常分支。
 //  6. 测试中包含日志，运行 go test -v 可查看详细过程。
 
-package service
+package test
 
 import (
 	"context"
@@ -32,6 +32,11 @@ import (
 	"smart-task-platform/internal/pkg/password"
 	redispkg "smart-task-platform/internal/pkg/redis"
 	"smart-task-platform/internal/repository"
+	"smart-task-platform/internal/service"
+)
+
+const (
+	constTokenType = "Bearer"
 )
 
 const (
@@ -150,11 +155,11 @@ func (m *mockAuthUserRepository) Create(ctx context.Context, tx *gorm.DB, user *
 	}
 
 	if _, ok := m.usersByUsername[username]; ok {
-		return ErrUsernameExists
+		return service.ErrUsernameExists
 	}
 
 	if _, ok := m.usersByEmail[email]; ok {
-		return ErrEmailExists
+		return service.ErrEmailExists
 	}
 
 	cp := *user
@@ -202,7 +207,7 @@ func (m *mockAuthUserRepository) GetByID(ctx context.Context, id uint64) (*model
 
 	user, ok := m.usersByID[id]
 	if !ok {
-		return nil, repository.ErrUserNotFound
+		return nil, service.ErrUserNotFound
 	}
 
 	return cloneAuthTestUser(user), nil
@@ -228,7 +233,7 @@ func (m *mockAuthUserRepository) GetByAccount(ctx context.Context, account strin
 		return cloneAuthTestUser(user), nil
 	}
 
-	return nil, repository.ErrUserNotFound
+	return nil, service.ErrUserNotFound
 }
 
 // ExistsByUsername 检查用户名是否存在。
@@ -278,7 +283,7 @@ func (m *mockAuthUserRepository) UpdateLastLoginAtWithTx(
 
 	user, ok := m.usersByID[userID]
 	if !ok {
-		return repository.ErrUserNotFound
+		return service.ErrUserNotFound
 	}
 
 	user.LastLoginAt = &loginAt
@@ -299,7 +304,7 @@ type authServiceMockTestEnv struct {
 	userRepo  *mockAuthUserRepository
 	authStore *redispkg.RedisAuthStore
 	jwtMgr    *jwtpkg.Manager
-	svc       *AuthService
+	svc       *service.AuthService
 }
 
 // newAuthServiceMockTestEnv 创建隔离测试环境。
@@ -342,7 +347,7 @@ func newAuthServiceMockTestEnv(t *testing.T) *authServiceMockTestEnv {
 		authTestRefreshTTL,
 	)
 
-	svc := NewAuthService(
+	svc := service.NewAuthService(
 		txMgr,
 		userRepo,
 		authStore,
@@ -557,7 +562,7 @@ func TestAuthService_Register_InvalidCases(t *testing.T) {
 				Password: authTestPlainPassword,
 				Nickname: "昵称",
 			},
-			wantErr: ErrInvalidUsernameFormat,
+			wantErr: service.ErrInvalidUsernameFormat,
 		},
 		{
 			name: "邮箱格式非法",
@@ -567,7 +572,7 @@ func TestAuthService_Register_InvalidCases(t *testing.T) {
 				Password: authTestPlainPassword,
 				Nickname: "昵称",
 			},
-			wantErr: ErrInvalidEmailFormat,
+			wantErr: service.ErrInvalidEmailFormat,
 		},
 		{
 			name: "密码格式非法",
@@ -577,7 +582,7 @@ func TestAuthService_Register_InvalidCases(t *testing.T) {
 				Password: "123",
 				Nickname: "昵称",
 			},
-			wantErr: ErrInvalidPasswordFormat,
+			wantErr: service.ErrInvalidPasswordFormat,
 		},
 		{
 			name: "昵称格式非法",
@@ -587,7 +592,7 @@ func TestAuthService_Register_InvalidCases(t *testing.T) {
 				Password: authTestPlainPassword,
 				Nickname: strings.Repeat("很", 100),
 			},
-			wantErr: ErrInvalidNicknameFormat,
+			wantErr: service.ErrInvalidNicknameFormat,
 		},
 	}
 
@@ -621,7 +626,7 @@ func TestAuthService_Register_DuplicateCases(t *testing.T) {
 				Password: authTestPlainPassword,
 				Nickname: "new",
 			},
-			wantErr: ErrUsernameExists,
+			wantErr: service.ErrUsernameExists,
 		},
 		{
 			name: "邮箱已存在",
@@ -631,7 +636,7 @@ func TestAuthService_Register_DuplicateCases(t *testing.T) {
 				Password: authTestPlainPassword,
 				Nickname: "new",
 			},
-			wantErr: ErrEmailExists,
+			wantErr: service.ErrEmailExists,
 		},
 	}
 
@@ -770,7 +775,7 @@ func TestAuthService_Login_FailedCases(t *testing.T) {
 				Account:  "@@@",
 				Password: authTestPlainPassword,
 			},
-			wantErr: ErrInvalidAccountFormat,
+			wantErr: service.ErrInvalidAccountFormat,
 		},
 		{
 			name: "用户不存在",
@@ -778,7 +783,7 @@ func TestAuthService_Login_FailedCases(t *testing.T) {
 				Account:  "nouser",
 				Password: authTestPlainPassword,
 			},
-			wantErr: ErrUserNotFound,
+			wantErr: service.ErrUserNotFound,
 		},
 		{
 			name: "密码错误",
@@ -796,7 +801,7 @@ func TestAuthService_Login_FailedCases(t *testing.T) {
 				Account:  authTestUsername,
 				Password: "WrongPassword123",
 			},
-			wantErr: ErrPasswordMismatch,
+			wantErr: service.ErrPasswordMismatch,
 		},
 		{
 			name: "用户被禁用",
@@ -814,7 +819,7 @@ func TestAuthService_Login_FailedCases(t *testing.T) {
 				Account:  authTestDisabledUser,
 				Password: authTestPlainPassword,
 			},
-			wantErr: ErrUserDisabled,
+			wantErr: service.ErrUserDisabled,
 		},
 		{
 			name: "更新最后登录时间失败",
@@ -827,13 +832,13 @@ func TestAuthService_Login_FailedCases(t *testing.T) {
 					authTestPlainPassword,
 					model.UserStatusActive,
 				)
-				env.userRepo.updateLastLoginErr = ErrInternal
+				env.userRepo.updateLastLoginErr = service.ErrInternal
 			},
 			req: &dto.LoginReq{
 				Account:  authTestUsername,
 				Password: authTestPlainPassword,
 			},
-			wantErr: ErrInternal,
+			wantErr: service.ErrInternal,
 		},
 	}
 
@@ -896,7 +901,7 @@ func TestAuthService_Me_FailedCases(t *testing.T) {
 		{
 			name:    "用户不存在",
 			userID:  999,
-			wantErr: ErrUserNotFound,
+			wantErr: service.ErrUserNotFound,
 		},
 		{
 			name: "用户被禁用",
@@ -911,7 +916,7 @@ func TestAuthService_Me_FailedCases(t *testing.T) {
 				)
 				return user.ID
 			},
-			wantErr: ErrUserDisabled,
+			wantErr: service.ErrUserDisabled,
 		},
 	}
 
@@ -1025,7 +1030,7 @@ func TestAuthService_RefreshToken_FailedCases(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Nil(t, resp)
-		assert.ErrorIs(t, err, ErrInvalidToken)
+		assert.ErrorIs(t, err, service.ErrInvalidToken)
 	})
 
 	t.Run("非法 refresh token", func(t *testing.T) {
@@ -1039,7 +1044,7 @@ func TestAuthService_RefreshToken_FailedCases(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Nil(t, resp)
-		assert.ErrorIs(t, err, ErrInvalidToken)
+		assert.ErrorIs(t, err, service.ErrInvalidToken)
 	})
 
 	t.Run("使用 access token 调 refresh 接口", func(t *testing.T) {
@@ -1069,7 +1074,7 @@ func TestAuthService_RefreshToken_FailedCases(t *testing.T) {
 
 		require.Error(t, err)
 		assert.Nil(t, resp)
-		assert.ErrorIs(t, err, ErrInvalidToken)
+		assert.ErrorIs(t, err, service.ErrInvalidToken)
 	})
 
 	t.Run("旧 refresh token 重复使用失败", func(t *testing.T) {
@@ -1166,7 +1171,7 @@ func TestAuthService_Logout_Success(t *testing.T) {
 
 // TestAuthService_Logout_Idempotent 测试重复退出。
 // 如果此测试失败，说明当前 LogoutSession 对重复退出不是幂等的；
-// 建议在 AuthService.Logout 或 RedisAuthStore.LogoutSession 中对会话不存在做幂等处理。
+// 建议在 service.AuthService.Logout 或 RedisAuthStore.LogoutSession 中对会话不存在做幂等处理。
 func TestAuthService_Logout_Idempotent(t *testing.T) {
 	env := newAuthServiceMockTestEnv(t)
 
@@ -1276,7 +1281,7 @@ func TestAuthService_ConcurrentLogin(t *testing.T) {
 		authTestConcurrentSize,
 	)
 
-	// AuthService.Login 内部使用 RetryRedisTx，通常应该全部成功；
+	// service.AuthService.Login 内部使用 RetryRedisTx，通常应该全部成功；
 	// 但最终一致性测试只强制要求至少一个成功。
 	require.GreaterOrEqual(t, successCount, 1)
 

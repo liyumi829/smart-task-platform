@@ -1,4 +1,4 @@
-// user_service_test.go
+// internal/service/test/user_service_test.go
 //
 // 说明：
 //  1. 不连接真实 MySQL。
@@ -8,7 +8,7 @@
 //  5. 全字段断言、完整日志输出，go test -v 可观察执行流程。
 //  6. 事务逻辑真实执行，确保事务闭包路径可正常运行。
 
-package service
+package test
 
 import (
 	"context"
@@ -28,6 +28,7 @@ import (
 	"smart-task-platform/internal/model"
 	"smart-task-platform/internal/pkg/password"
 	"smart-task-platform/internal/repository"
+	"smart-task-platform/internal/service"
 )
 
 const (
@@ -197,7 +198,7 @@ type userTestEnv struct {
 	db       *gorm.DB
 	txMgr    *repository.TxManager
 	userRepo *mockUserRepository
-	svc      *UserService
+	svc      *service.UserService
 }
 
 // newUserTestEnv 创建测试环境
@@ -216,7 +217,7 @@ func newUserTestEnv(t *testing.T) *userTestEnv {
 
 	txMgr := repository.NewTxManager(db)
 	userRepo := newMockUserRepository()
-	svc := NewUserService(txMgr, userRepo)
+	svc := service.NewUserService(txMgr, userRepo)
 
 	t.Cleanup(func() {
 		zap.ReplaceGlobals(oldLogger)
@@ -328,7 +329,7 @@ func TestGetUserPublicInfo(t *testing.T) {
 		resp, err := env.svc.GetUserPublicInfo(env.ctx, 9999)
 		t.Logf("[get public info] user not found, err=%v", err)
 
-		require.ErrorIs(t, err, ErrUserNotFound)
+		require.ErrorIs(t, err, service.ErrUserNotFound)
 		assert.Nil(t, resp)
 	})
 
@@ -377,7 +378,7 @@ func TestUpdateUserProfile(t *testing.T) {
 		resp, err := env.svc.UpdateUserProfile(env.ctx, 9999, "nick", testUserAvatar)
 		t.Logf("[update profile] user not found, err=%v", err)
 
-		require.ErrorIs(t, err, ErrUserNotFound)
+		require.ErrorIs(t, err, service.ErrUserNotFound)
 		assert.Nil(t, resp)
 	})
 
@@ -399,7 +400,7 @@ func TestUpdateUserProfile(t *testing.T) {
 		resp, err := env.svc.UpdateUserProfile(env.ctx, user.ID, "newnick", testUserAvatar)
 		t.Logf("[update profile] user disabled, err=%v", err)
 
-		require.ErrorIs(t, err, ErrUserDisabled)
+		require.ErrorIs(t, err, service.ErrUserDisabled)
 		assert.Nil(t, resp)
 	})
 
@@ -510,7 +511,7 @@ func TestUpdateUserPassword(t *testing.T) {
 		resp, err := env.svc.UpdateUserPassword(env.ctx, user.ID, testUserPassword, "123")
 		t.Logf("[update pwd] invalid format err=%v", err)
 
-		require.ErrorIs(t, err, ErrInvalidPasswordFormat)
+		require.ErrorIs(t, err, service.ErrInvalidPasswordFormat)
 		assert.Nil(t, resp)
 	})
 
@@ -518,7 +519,7 @@ func TestUpdateUserPassword(t *testing.T) {
 		resp, err := env.svc.UpdateUserPassword(env.ctx, 9999, testUserPassword, testNewPassword)
 		t.Logf("[update pwd] user not found err=%v", err)
 
-		require.ErrorIs(t, err, ErrUserNotFound)
+		require.ErrorIs(t, err, service.ErrUserNotFound)
 		assert.Nil(t, resp)
 	})
 
@@ -540,7 +541,7 @@ func TestUpdateUserPassword(t *testing.T) {
 		resp, err := env.svc.UpdateUserPassword(env.ctx, user.ID, testUserPassword, testNewPassword)
 		t.Logf("[update pwd] user disabled err=%v", err)
 
-		require.ErrorIs(t, err, ErrUserDisabled)
+		require.ErrorIs(t, err, service.ErrUserDisabled)
 		assert.Nil(t, resp)
 	})
 
@@ -550,7 +551,7 @@ func TestUpdateUserPassword(t *testing.T) {
 		resp, err := env.svc.UpdateUserPassword(env.ctx, user.ID, "WrongPass123!", testNewPassword)
 		t.Logf("[update pwd] old pwd mismatch err=%v", err)
 
-		require.ErrorIs(t, err, ErrOldPasswordMismatch)
+		require.ErrorIs(t, err, service.ErrOldPasswordMismatch)
 		assert.Nil(t, resp)
 	})
 
@@ -560,7 +561,7 @@ func TestUpdateUserPassword(t *testing.T) {
 		resp, err := env.svc.UpdateUserPassword(env.ctx, user.ID, testUserPassword, testUserPassword)
 		t.Logf("[update pwd] same password err=%v", err)
 
-		require.ErrorIs(t, err, ErrNewPasswordSameAsOld)
+		require.ErrorIs(t, err, service.ErrNewPasswordSameAsOld)
 		assert.Nil(t, resp)
 	})
 

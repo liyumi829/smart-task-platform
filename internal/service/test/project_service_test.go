@@ -1,5 +1,5 @@
-// internal/service/project_service_test.go
-package service
+// internal/service/test/project_service_test.go
+package test
 
 import (
 	"context"
@@ -19,6 +19,7 @@ import (
 
 	"smart-task-platform/internal/model"
 	"smart-task-platform/internal/repository"
+	"smart-task-platform/internal/service"
 )
 
 const (
@@ -442,7 +443,7 @@ type psProjectServiceTestEnv struct {
 	userRepo    *psMockUserRepo
 	projectRepo *psMockProjectRepo
 	memberRepo  *psMockProjectMemberRepo
-	svc         *ProjectService
+	svc         *service.ProjectService
 }
 
 // psNewProjectServiceTestEnv 创建独立测试环境，避免测试之间数据污染。
@@ -466,7 +467,7 @@ func psNewProjectServiceTestEnv(t *testing.T) *psProjectServiceTestEnv {
 	projectRepo := psNewMockProjectRepo(userRepo)
 	memberRepo := psNewMockProjectMemberRepo()
 
-	svc := NewProjectService(txMgr, userRepo, projectRepo, memberRepo)
+	svc := service.NewProjectService(txMgr, userRepo, projectRepo, memberRepo)
 
 	t.Cleanup(func() {
 		zap.ReplaceGlobals(oldLogger)
@@ -614,7 +615,7 @@ func TestProjectServiceCreateProject(t *testing.T) {
 		resp, err := env.svc.CreateProject(env.ctx, nil)
 		t.Logf("[create project] invalid param resp=%+v err=%v", resp, err)
 
-		require.ErrorIs(t, err, ErrInvalidProjectParam)
+		require.ErrorIs(t, err, service.ErrInvalidProjectParam)
 		assert.Nil(t, resp)
 	})
 
@@ -622,13 +623,13 @@ func TestProjectServiceCreateProject(t *testing.T) {
 		env := psNewProjectServiceTestEnv(t)
 		owner := env.psSeedUser(t, psTestOwnerUsername, psTestOwnerNickname, psTestOwnerAvatar)
 
-		resp, err := env.svc.CreateProject(env.ctx, &CreateProjectParams{
+		resp, err := env.svc.CreateProject(env.ctx, &service.CreateProjectParams{
 			UserID: owner.ID,
 			Name:   "   ",
 		})
 		t.Logf("[create project] invalid name resp=%+v err=%v", resp, err)
 
-		require.ErrorIs(t, err, ErrEmptyProjectName)
+		require.ErrorIs(t, err, service.ErrEmptyProjectName)
 		assert.Nil(t, resp)
 	})
 
@@ -636,14 +637,14 @@ func TestProjectServiceCreateProject(t *testing.T) {
 		env := psNewProjectServiceTestEnv(t)
 		owner := env.psSeedUser(t, psTestOwnerUsername, psTestOwnerNickname, psTestOwnerAvatar)
 
-		resp, err := env.svc.CreateProject(env.ctx, &CreateProjectParams{
+		resp, err := env.svc.CreateProject(env.ctx, &service.CreateProjectParams{
 			UserID:    owner.ID,
 			Name:      psTestProjectName,
 			StartTime: "invalid-time",
 		})
 		t.Logf("[create project] invalid start time resp=%+v err=%v", resp, err)
 
-		require.ErrorIs(t, err, ErrInvalidTime)
+		require.ErrorIs(t, err, service.ErrInvalidTime)
 		assert.Nil(t, resp)
 	})
 
@@ -651,14 +652,14 @@ func TestProjectServiceCreateProject(t *testing.T) {
 		env := psNewProjectServiceTestEnv(t)
 		owner := env.psSeedUser(t, psTestOwnerUsername, psTestOwnerNickname, psTestOwnerAvatar)
 
-		resp, err := env.svc.CreateProject(env.ctx, &CreateProjectParams{
+		resp, err := env.svc.CreateProject(env.ctx, &service.CreateProjectParams{
 			UserID:  owner.ID,
 			Name:    psTestProjectName,
 			EndTime: "invalid-time",
 		})
 		t.Logf("[create project] invalid end time resp=%+v err=%v", resp, err)
 
-		require.ErrorIs(t, err, ErrInvalidTime)
+		require.ErrorIs(t, err, service.ErrInvalidTime)
 		assert.Nil(t, resp)
 	})
 
@@ -666,7 +667,7 @@ func TestProjectServiceCreateProject(t *testing.T) {
 		env := psNewProjectServiceTestEnv(t)
 		owner := env.psSeedUser(t, psTestOwnerUsername, psTestOwnerNickname, psTestOwnerAvatar)
 
-		resp, err := env.svc.CreateProject(env.ctx, &CreateProjectParams{
+		resp, err := env.svc.CreateProject(env.ctx, &service.CreateProjectParams{
 			UserID:    owner.ID,
 			Name:      psTestProjectName,
 			StartTime: psTestEndTime,
@@ -674,21 +675,21 @@ func TestProjectServiceCreateProject(t *testing.T) {
 		})
 		t.Logf("[create project] invalid time range resp=%+v err=%v", resp, err)
 
-		require.ErrorIs(t, err, ErrInvalidTimeRange)
+		require.ErrorIs(t, err, service.ErrInvalidTimeRange)
 		assert.Nil(t, resp)
 	})
 
 	t.Run("user not found", func(t *testing.T) {
 		env := psNewProjectServiceTestEnv(t)
 
-		resp, err := env.svc.CreateProject(env.ctx, &CreateProjectParams{
+		resp, err := env.svc.CreateProject(env.ctx, &service.CreateProjectParams{
 			UserID:      9999,
 			Name:        psTestProjectName,
 			Description: psTestProjectDescription,
 		})
 		t.Logf("[create project] user not found resp=%+v err=%v", resp, err)
 
-		require.ErrorIs(t, err, ErrUserNotFound)
+		require.ErrorIs(t, err, service.ErrUserNotFound)
 		assert.Nil(t, resp)
 	})
 
@@ -696,7 +697,7 @@ func TestProjectServiceCreateProject(t *testing.T) {
 		env := psNewProjectServiceTestEnv(t)
 		env.userRepo.getByIDErr = errors.New("mock get user failed")
 
-		resp, err := env.svc.CreateProject(env.ctx, &CreateProjectParams{
+		resp, err := env.svc.CreateProject(env.ctx, &service.CreateProjectParams{
 			UserID:      1,
 			Name:        psTestProjectName,
 			Description: psTestProjectDescription,
@@ -713,7 +714,7 @@ func TestProjectServiceCreateProject(t *testing.T) {
 		owner := env.psSeedUser(t, psTestOwnerUsername, psTestOwnerNickname, psTestOwnerAvatar)
 		env.projectRepo.createErr = errors.New("mock create project failed")
 
-		resp, err := env.svc.CreateProject(env.ctx, &CreateProjectParams{
+		resp, err := env.svc.CreateProject(env.ctx, &service.CreateProjectParams{
 			UserID:      owner.ID,
 			Name:        psTestProjectName,
 			Description: psTestProjectDescription,
@@ -734,7 +735,7 @@ func TestProjectServiceCreateProject(t *testing.T) {
 		owner := env.psSeedUser(t, psTestOwnerUsername, psTestOwnerNickname, psTestOwnerAvatar)
 		env.memberRepo.createErr = errors.New("mock create project member failed")
 
-		resp, err := env.svc.CreateProject(env.ctx, &CreateProjectParams{
+		resp, err := env.svc.CreateProject(env.ctx, &service.CreateProjectParams{
 			UserID:      owner.ID,
 			Name:        psTestProjectName,
 			Description: psTestProjectDescription,
@@ -756,7 +757,7 @@ func TestProjectServiceCreateProject(t *testing.T) {
 		env := psNewProjectServiceTestEnv(t)
 		owner := env.psSeedUser(t, psTestOwnerUsername, psTestOwnerNickname, psTestOwnerAvatar)
 
-		resp, err := env.svc.CreateProject(env.ctx, &CreateProjectParams{
+		resp, err := env.svc.CreateProject(env.ctx, &service.CreateProjectParams{
 			UserID:      owner.ID,
 			Name:        "  " + psTestProjectName + "  ",
 			Description: "  " + psTestProjectDescription + "  ",
@@ -805,7 +806,7 @@ func TestProjectServiceListProjects(t *testing.T) {
 		resp, err := env.svc.ListProjects(env.ctx, nil)
 		t.Logf("[list projects] invalid param resp=%+v err=%v", resp, err)
 
-		require.ErrorIs(t, err, ErrInvalidProjectParam)
+		require.ErrorIs(t, err, service.ErrInvalidProjectParam)
 		assert.Nil(t, resp)
 	})
 
@@ -813,13 +814,13 @@ func TestProjectServiceListProjects(t *testing.T) {
 		env := psNewProjectServiceTestEnv(t)
 		user := env.psSeedUser(t, psTestOwnerUsername, psTestOwnerNickname, psTestOwnerAvatar)
 
-		resp, err := env.svc.ListProjects(env.ctx, &ListProjectsParam{
+		resp, err := env.svc.ListProjects(env.ctx, &service.ListProjectsParam{
 			UserID: user.ID,
 			Status: "bad-status",
 		})
 		t.Logf("[list projects] invalid status resp=%+v err=%v", resp, err)
 
-		require.ErrorIs(t, err, ErrInvalidProjectStatus)
+		require.ErrorIs(t, err, service.ErrInvalidProjectStatus)
 		assert.Nil(t, resp)
 	})
 
@@ -828,7 +829,7 @@ func TestProjectServiceListProjects(t *testing.T) {
 		user := env.psSeedUser(t, psTestOwnerUsername, psTestOwnerNickname, psTestOwnerAvatar)
 		env.memberRepo.listErr = errors.New("mock list project ids failed")
 
-		resp, err := env.svc.ListProjects(env.ctx, &ListProjectsParam{
+		resp, err := env.svc.ListProjects(env.ctx, &service.ListProjectsParam{
 			UserID:   user.ID,
 			Page:     1,
 			PageSize: 10,
@@ -844,7 +845,7 @@ func TestProjectServiceListProjects(t *testing.T) {
 		env := psNewProjectServiceTestEnv(t)
 		user := env.psSeedUser(t, psTestOwnerUsername, psTestOwnerNickname, psTestOwnerAvatar)
 
-		resp, err := env.svc.ListProjects(env.ctx, &ListProjectsParam{
+		resp, err := env.svc.ListProjects(env.ctx, &service.ListProjectsParam{
 			UserID:   user.ID,
 			Page:     1,
 			PageSize: 10,
@@ -864,7 +865,7 @@ func TestProjectServiceListProjects(t *testing.T) {
 		owner, _, _, project := env.psSeedFullProject(t)
 		env.projectRepo.searchErr = errors.New("mock search projects failed")
 
-		resp, err := env.svc.ListProjects(env.ctx, &ListProjectsParam{
+		resp, err := env.svc.ListProjects(env.ctx, &service.ListProjectsParam{
 			UserID:   owner.ID,
 			Page:     1,
 			PageSize: 10,
@@ -881,7 +882,7 @@ func TestProjectServiceListProjects(t *testing.T) {
 		env := psNewProjectServiceTestEnv(t)
 		owner, _, _, project := env.psSeedFullProject(t)
 
-		resp, err := env.svc.ListProjects(env.ctx, &ListProjectsParam{
+		resp, err := env.svc.ListProjects(env.ctx, &service.ListProjectsParam{
 			UserID:   owner.ID,
 			Page:     1,
 			PageSize: 10,
@@ -917,7 +918,7 @@ func TestProjectServiceListProjects(t *testing.T) {
 		env := psNewProjectServiceTestEnv(t)
 		owner, _, _, _ := env.psSeedFullProject(t)
 
-		resp, err := env.svc.ListProjects(env.ctx, &ListProjectsParam{
+		resp, err := env.svc.ListProjects(env.ctx, &service.ListProjectsParam{
 			UserID:   owner.ID,
 			Page:     2,
 			PageSize: 10,
@@ -941,7 +942,7 @@ func TestProjectServiceGetProjectDetail(t *testing.T) {
 		resp, err := env.svc.GetProjectDetail(env.ctx, nil)
 		t.Logf("[get project detail] invalid param resp=%+v err=%v", resp, err)
 
-		require.ErrorIs(t, err, ErrInvalidProjectParam)
+		require.ErrorIs(t, err, service.ErrInvalidProjectParam)
 		assert.Nil(t, resp)
 	})
 
@@ -950,7 +951,7 @@ func TestProjectServiceGetProjectDetail(t *testing.T) {
 		owner, _, _, project := env.psSeedFullProject(t)
 		env.memberRepo.existsErr = errors.New("mock exists project member failed")
 
-		resp, err := env.svc.GetProjectDetail(env.ctx, &GetProjectDetailParam{
+		resp, err := env.svc.GetProjectDetail(env.ctx, &service.GetProjectDetailParam{
 			UserID:    owner.ID,
 			ProjectID: project.ID,
 		})
@@ -966,13 +967,13 @@ func TestProjectServiceGetProjectDetail(t *testing.T) {
 		outsider := env.psSeedUser(t, "ps_test_outsider", "外部用户", "https://example.com/outside.png")
 		_, _, _, project := env.psSeedFullProject(t)
 
-		resp, err := env.svc.GetProjectDetail(env.ctx, &GetProjectDetailParam{
+		resp, err := env.svc.GetProjectDetail(env.ctx, &service.GetProjectDetailParam{
 			UserID:    outsider.ID,
 			ProjectID: project.ID,
 		})
 		t.Logf("[get project detail] project member not found resp=%+v err=%v", resp, err)
 
-		require.ErrorIs(t, err, ErrProjectMemberNotFound)
+		require.ErrorIs(t, err, service.ErrProjectMemberNotFound)
 		assert.Nil(t, resp)
 	})
 
@@ -981,13 +982,13 @@ func TestProjectServiceGetProjectDetail(t *testing.T) {
 		owner := env.psSeedUser(t, psTestOwnerUsername, psTestOwnerNickname, psTestOwnerAvatar)
 		env.psSeedProjectMember(t, 9999, owner.ID, model.ProjectMemberRoleOwner)
 
-		resp, err := env.svc.GetProjectDetail(env.ctx, &GetProjectDetailParam{
+		resp, err := env.svc.GetProjectDetail(env.ctx, &service.GetProjectDetailParam{
 			UserID:    owner.ID,
 			ProjectID: 9999,
 		})
 		t.Logf("[get project detail] project not found resp=%+v err=%v", resp, err)
 
-		require.ErrorIs(t, err, ErrProjectNotFound)
+		require.ErrorIs(t, err, service.ErrProjectNotFound)
 		assert.Nil(t, resp)
 	})
 
@@ -996,7 +997,7 @@ func TestProjectServiceGetProjectDetail(t *testing.T) {
 		owner, _, _, project := env.psSeedFullProject(t)
 		env.projectRepo.detailErr = errors.New("mock get project detail failed")
 
-		resp, err := env.svc.GetProjectDetail(env.ctx, &GetProjectDetailParam{
+		resp, err := env.svc.GetProjectDetail(env.ctx, &service.GetProjectDetailParam{
 			UserID:    owner.ID,
 			ProjectID: project.ID,
 		})
@@ -1011,7 +1012,7 @@ func TestProjectServiceGetProjectDetail(t *testing.T) {
 		env := psNewProjectServiceTestEnv(t)
 		owner, _, _, project := env.psSeedFullProject(t)
 
-		resp, err := env.svc.GetProjectDetail(env.ctx, &GetProjectDetailParam{
+		resp, err := env.svc.GetProjectDetail(env.ctx, &service.GetProjectDetailParam{
 			UserID:    owner.ID,
 			ProjectID: project.ID,
 		})
@@ -1045,7 +1046,7 @@ func TestProjectServiceUpdateProject(t *testing.T) {
 		resp, err := env.svc.UpdateProject(env.ctx, nil)
 		t.Logf("[update project] invalid param resp=%+v err=%v", resp, err)
 
-		require.ErrorIs(t, err, ErrInvalidProjectParam)
+		require.ErrorIs(t, err, service.ErrInvalidProjectParam)
 		assert.Nil(t, resp)
 	})
 
@@ -1053,7 +1054,7 @@ func TestProjectServiceUpdateProject(t *testing.T) {
 		env := psNewProjectServiceTestEnv(t)
 		owner, _, _, project := env.psSeedFullProject(t)
 
-		resp, err := env.svc.UpdateProject(env.ctx, &UpdateProjectParam{
+		resp, err := env.svc.UpdateProject(env.ctx, &service.UpdateProjectParam{
 			UserID:    owner.ID,
 			ProjectID: project.ID,
 			Name:      "   ", // 允许通过，后台不改数据
@@ -1066,14 +1067,14 @@ func TestProjectServiceUpdateProject(t *testing.T) {
 		env := psNewProjectServiceTestEnv(t)
 		owner, _, _, project := env.psSeedFullProject(t)
 
-		resp, err := env.svc.UpdateProject(env.ctx, &UpdateProjectParam{
+		resp, err := env.svc.UpdateProject(env.ctx, &service.UpdateProjectParam{
 			UserID:    owner.ID,
 			ProjectID: project.ID,
 			Name:      "   @",
 		})
 		t.Logf("[update project] invalid project name resp=%+v err=%v", resp, err)
 
-		require.ErrorIs(t, err, ErrInvalidProjectName)
+		require.ErrorIs(t, err, service.ErrInvalidProjectName)
 		assert.Nil(t, resp)
 	})
 
@@ -1081,7 +1082,7 @@ func TestProjectServiceUpdateProject(t *testing.T) {
 		env := psNewProjectServiceTestEnv(t)
 		owner, _, _, project := env.psSeedFullProject(t)
 
-		resp, err := env.svc.UpdateProject(env.ctx, &UpdateProjectParam{
+		resp, err := env.svc.UpdateProject(env.ctx, &service.UpdateProjectParam{
 			UserID:    owner.ID,
 			ProjectID: project.ID,
 			Name:      psTestProjectNewName,
@@ -1089,7 +1090,7 @@ func TestProjectServiceUpdateProject(t *testing.T) {
 		})
 		t.Logf("[update project] invalid status resp=%+v err=%v", resp, err)
 
-		require.ErrorIs(t, err, ErrInvalidProjectStatus)
+		require.ErrorIs(t, err, service.ErrInvalidProjectStatus)
 		assert.Nil(t, resp)
 	})
 
@@ -1097,7 +1098,7 @@ func TestProjectServiceUpdateProject(t *testing.T) {
 		env := psNewProjectServiceTestEnv(t)
 		owner, _, _, project := env.psSeedFullProject(t)
 
-		resp, err := env.svc.UpdateProject(env.ctx, &UpdateProjectParam{
+		resp, err := env.svc.UpdateProject(env.ctx, &service.UpdateProjectParam{
 			UserID:    owner.ID,
 			ProjectID: project.ID,
 			Name:      psTestProjectNewName,
@@ -1105,7 +1106,7 @@ func TestProjectServiceUpdateProject(t *testing.T) {
 		})
 		t.Logf("[update project] invalid start time resp=%+v err=%v", resp, err)
 
-		require.ErrorIs(t, err, ErrInvalidTime)
+		require.ErrorIs(t, err, service.ErrInvalidTime)
 		assert.Nil(t, resp)
 	})
 
@@ -1113,7 +1114,7 @@ func TestProjectServiceUpdateProject(t *testing.T) {
 		env := psNewProjectServiceTestEnv(t)
 		owner, _, _, project := env.psSeedFullProject(t)
 
-		resp, err := env.svc.UpdateProject(env.ctx, &UpdateProjectParam{
+		resp, err := env.svc.UpdateProject(env.ctx, &service.UpdateProjectParam{
 			UserID:    owner.ID,
 			ProjectID: project.ID,
 			Name:      psTestProjectNewName,
@@ -1121,7 +1122,7 @@ func TestProjectServiceUpdateProject(t *testing.T) {
 		})
 		t.Logf("[update project] invalid end time resp=%+v err=%v", resp, err)
 
-		require.ErrorIs(t, err, ErrInvalidTime)
+		require.ErrorIs(t, err, service.ErrInvalidTime)
 		assert.Nil(t, resp)
 	})
 
@@ -1129,7 +1130,7 @@ func TestProjectServiceUpdateProject(t *testing.T) {
 		env := psNewProjectServiceTestEnv(t)
 		owner, _, _, project := env.psSeedFullProject(t)
 
-		resp, err := env.svc.UpdateProject(env.ctx, &UpdateProjectParam{
+		resp, err := env.svc.UpdateProject(env.ctx, &service.UpdateProjectParam{
 			UserID:    owner.ID,
 			ProjectID: project.ID,
 			Name:      psTestProjectNewName,
@@ -1138,7 +1139,7 @@ func TestProjectServiceUpdateProject(t *testing.T) {
 		})
 		t.Logf("[update project] invalid time range resp=%+v err=%v", resp, err)
 
-		require.ErrorIs(t, err, ErrInvalidTimeRange)
+		require.ErrorIs(t, err, service.ErrInvalidTimeRange)
 		assert.Nil(t, resp)
 	})
 
@@ -1147,7 +1148,7 @@ func TestProjectServiceUpdateProject(t *testing.T) {
 		outsider := env.psSeedUser(t, "ps_test_outsider", "外部用户", "https://example.com/outside.png")
 		_, _, _, project := env.psSeedFullProject(t)
 
-		resp, err := env.svc.UpdateProject(env.ctx, &UpdateProjectParam{
+		resp, err := env.svc.UpdateProject(env.ctx, &service.UpdateProjectParam{
 			UserID:      outsider.ID,
 			ProjectID:   project.ID,
 			Name:        psTestProjectNewName,
@@ -1155,7 +1156,7 @@ func TestProjectServiceUpdateProject(t *testing.T) {
 		})
 		t.Logf("[update project] member not found resp=%+v err=%v", resp, err)
 
-		require.ErrorIs(t, err, ErrProjectMemberNotFound)
+		require.ErrorIs(t, err, service.ErrProjectMemberNotFound)
 		assert.Nil(t, resp)
 	})
 
@@ -1164,7 +1165,7 @@ func TestProjectServiceUpdateProject(t *testing.T) {
 		owner, _, _, project := env.psSeedFullProject(t)
 		env.memberRepo.getErr = errors.New("mock get project member failed")
 
-		resp, err := env.svc.UpdateProject(env.ctx, &UpdateProjectParam{
+		resp, err := env.svc.UpdateProject(env.ctx, &service.UpdateProjectParam{
 			UserID:      owner.ID,
 			ProjectID:   project.ID,
 			Name:        psTestProjectNewName,
@@ -1181,7 +1182,7 @@ func TestProjectServiceUpdateProject(t *testing.T) {
 		env := psNewProjectServiceTestEnv(t)
 		_, _, member, project := env.psSeedFullProject(t)
 
-		resp, err := env.svc.UpdateProject(env.ctx, &UpdateProjectParam{
+		resp, err := env.svc.UpdateProject(env.ctx, &service.UpdateProjectParam{
 			UserID:      member.ID,
 			ProjectID:   project.ID,
 			Name:        psTestProjectNewName,
@@ -1189,7 +1190,7 @@ func TestProjectServiceUpdateProject(t *testing.T) {
 		})
 		t.Logf("[update project] forbidden resp=%+v err=%v", resp, err)
 
-		require.ErrorIs(t, err, ErrProjectForbidden)
+		require.ErrorIs(t, err, service.ErrProjectForbidden)
 		assert.Nil(t, resp)
 	})
 
@@ -1201,7 +1202,7 @@ func TestProjectServiceUpdateProject(t *testing.T) {
 		delete(env.projectRepo.projects, project.ID)
 		env.projectRepo.mu.Unlock()
 
-		resp, err := env.svc.UpdateProject(env.ctx, &UpdateProjectParam{
+		resp, err := env.svc.UpdateProject(env.ctx, &service.UpdateProjectParam{
 			UserID:      owner.ID,
 			ProjectID:   project.ID,
 			Name:        psTestProjectNewName,
@@ -1210,7 +1211,7 @@ func TestProjectServiceUpdateProject(t *testing.T) {
 		})
 		t.Logf("[update project] project not found resp=%+v err=%v", resp, err)
 
-		require.ErrorIs(t, err, ErrProjectNotFound)
+		require.ErrorIs(t, err, service.ErrProjectNotFound)
 		assert.Nil(t, resp)
 		assert.True(t, env.projectRepo.updateWithTxCalled)
 		assert.False(t, env.projectRepo.lastTxIsNil)
@@ -1221,7 +1222,7 @@ func TestProjectServiceUpdateProject(t *testing.T) {
 		owner, _, _, project := env.psSeedFullProject(t)
 		env.projectRepo.updateErr = errors.New("mock update project failed")
 
-		resp, err := env.svc.UpdateProject(env.ctx, &UpdateProjectParam{
+		resp, err := env.svc.UpdateProject(env.ctx, &service.UpdateProjectParam{
 			UserID:      owner.ID,
 			ProjectID:   project.ID,
 			Name:        psTestProjectNewName,
@@ -1242,7 +1243,7 @@ func TestProjectServiceUpdateProject(t *testing.T) {
 		owner, _, _, project := env.psSeedFullProject(t)
 		env.projectRepo.detailErr = errors.New("mock get updated project failed")
 
-		resp, err := env.svc.UpdateProject(env.ctx, &UpdateProjectParam{
+		resp, err := env.svc.UpdateProject(env.ctx, &service.UpdateProjectParam{
 			UserID:      owner.ID,
 			ProjectID:   project.ID,
 			Name:        psTestProjectNewName,
@@ -1262,7 +1263,7 @@ func TestProjectServiceUpdateProject(t *testing.T) {
 		env := psNewProjectServiceTestEnv(t)
 		owner, admin, _, project := env.psSeedFullProject(t)
 
-		resp, err := env.svc.UpdateProject(env.ctx, &UpdateProjectParam{
+		resp, err := env.svc.UpdateProject(env.ctx, &service.UpdateProjectParam{
 			UserID:      admin.ID,
 			ProjectID:   project.ID,
 			Name:        "  " + psTestProjectNewName + "  ",
@@ -1310,7 +1311,7 @@ func TestProjectServiceArchiveProject(t *testing.T) {
 		resp, err := env.svc.ArchiveProject(env.ctx, 0, 0)
 		t.Logf("[archive project] invalid param resp=%+v err=%v", resp, err)
 
-		require.ErrorIs(t, err, ErrInvalidProjectParam)
+		require.ErrorIs(t, err, service.ErrInvalidProjectParam)
 		assert.Nil(t, resp)
 	})
 
@@ -1322,7 +1323,7 @@ func TestProjectServiceArchiveProject(t *testing.T) {
 		resp, err := env.svc.ArchiveProject(env.ctx, outsider.ID, project.ID)
 		t.Logf("[archive project] member not found resp=%+v err=%v", resp, err)
 
-		require.ErrorIs(t, err, ErrProjectMemberNotFound)
+		require.ErrorIs(t, err, service.ErrProjectMemberNotFound)
 		assert.Nil(t, resp)
 	})
 
@@ -1346,7 +1347,7 @@ func TestProjectServiceArchiveProject(t *testing.T) {
 		resp, err := env.svc.ArchiveProject(env.ctx, member.ID, project.ID)
 		t.Logf("[archive project] forbidden resp=%+v err=%v", resp, err)
 
-		require.ErrorIs(t, err, ErrProjectForbidden)
+		require.ErrorIs(t, err, service.ErrProjectForbidden)
 		assert.Nil(t, resp)
 	})
 
@@ -1361,7 +1362,7 @@ func TestProjectServiceArchiveProject(t *testing.T) {
 		resp, err := env.svc.ArchiveProject(env.ctx, owner.ID, project.ID)
 		t.Logf("[archive project] project not found resp=%+v err=%v", resp, err)
 
-		require.ErrorIs(t, err, ErrProjectNotFound)
+		require.ErrorIs(t, err, service.ErrProjectNotFound)
 		assert.Nil(t, resp)
 		assert.True(t, env.projectRepo.archiveWithTxCalled)
 		assert.False(t, env.projectRepo.lastTxIsNil)
