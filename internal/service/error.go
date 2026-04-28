@@ -35,6 +35,10 @@ var (
 	ErrInvalidProjectDescription = errors.New("invalid project description")      // 项目描述不合法
 	ErrInvalidTimeRange          = errors.New("invalid time range")               // 时间范围不合法
 
-	ErrProjectMemberNotFound    = errors.New("project member not found")    // 项目成员不存在
-	ErrInvalidProjectMemberRole = errors.New("invalid project member role") // 项目成员角色不合法
+	ErrProjectMemberNotFound      = errors.New("project member not found")            // 项目成员不存在
+	ErrInvalidProjectMemberParam  = errors.New("invalid project member parameter")    // 项目成员参数非法
+	ErrInvalidProjectMemberRole   = errors.New("invalid project member role")         // 项目成员角色不合法
+	ErrEmptyProjectMemberRole     = errors.New("project member role cannot be empty") // 项目成员角色不能为空
+	ErrProjectMemberAlreadyExists = errors.New("project member already exists")       // 项目成员已存在
+	ErrExceedsAdminMemberLimit    = errors.New("admin member limit exceeded")         // 管理员人数已达上限
 )

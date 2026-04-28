@@ -200,3 +200,22 @@ func (r *projectRepository) SearchProjects(ctx context.Context, query *ProjectSe
 
 	return projects, total, nil
 }
+
+// ExistsByProjectID 根据项目ID判断项目是否存在
+func (r *projectRepository) ExistsByProjectID(ctx context.Context, projectID uint64) (bool, error) {
+	if projectID <= 0 {
+		return false, ErrProjectQueryInvalid
+	}
+
+	var count int64
+	err := getDB(ctx, r.db, nil).
+		Model(&model.Project{}).
+		Where(model.ProjectColumnID+" = ?", projectID).
+		Limit(1).
+		Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+
+	return count > 0, nil
+}

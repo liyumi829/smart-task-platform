@@ -62,15 +62,16 @@ func main() {
 	projectMemberRepo := repository.NewProjectMemberRepository(db) // 项目成员表
 
 	// 初始化服务
-	authService := service.NewAuthService(txManager, userRepo, authStore, jwtManager)                // 鉴权服务
-	userService := service.NewUserService(txManager, userRepo)                                       // 用户服务
-	projectService := service.NewProjectService(txManager, userRepo, projectRepo, projectMemberRepo) // 项目服务
+	authService := service.NewAuthService(txManager, userRepo, authStore, jwtManager)                            // 鉴权服务
+	userService := service.NewUserService(txManager, userRepo)                                                   // 用户服务
+	projectService := service.NewProjectService(txManager, userRepo, projectRepo, projectMemberRepo)             // 项目服务
+	projectMemberService := service.NewProjectMemberService(txManager, userRepo, projectRepo, projectMemberRepo) // 项目成员服务
 
 	// 初始化 Handler
-	authHandler := handler.NewAuthHandler(authService)          // 鉴权 Handler
-	userHandler := handler.NewUserHandler(userService)          // 用户 Handler
-	projectHandler := handler.NewProjectHandler(projectService) // 项目 Handler
-
+	authHandler := handler.NewAuthHandler(authService)                            // 鉴权 Handler
+	userHandler := handler.NewUserHandler(userService)                            // 用户 Handler
+	projectHandler := handler.NewProjectHandler(projectService)                   // 项目 Handler
+	projectMemberHandler := handler.NewProjectMemberHandler(projectMemberService) // 项目成员 Handler
 	// 初始化 Gin
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery())
@@ -86,7 +87,7 @@ func main() {
 	}
 
 	// 注册路由
-	router.Register(r, authHandler, userHandler, projectHandler, jwtManager, authStore)
+	router.Register(r, jwtManager, authStore, authHandler, userHandler, projectHandler, projectMemberHandler)
 
 	// 启动服务
 	addr := net.JoinHostPort(*host, *port)
