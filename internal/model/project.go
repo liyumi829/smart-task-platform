@@ -47,7 +47,7 @@ type Project struct {
 	DeletedAt   gorm.DeletedAt `gorm:"column:deleted_at;type:datetime;index;comment:软删除时间" json:"deleted_at"`
 
 	// 关联关系
-	Owner   User            `gorm:"foreignKey:OwnerID;references:ID" json:"owner"`     // 项目拥有者
+	Owner   *User           `gorm:"foreignKey:OwnerID;references:ID" json:"owner"`     // 项目拥有者
 	Members []ProjectMember `gorm:"foreignKey:ProjectID;references:ID" json:"members"` // 项目成员列表
 }
 

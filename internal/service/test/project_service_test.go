@@ -134,7 +134,7 @@ func (m *psMockProjectRepo) psFillOwner(p *model.Project) {
 		return
 	}
 
-	p.Owner = *u
+	p.Owner = u
 }
 
 func (m *psMockProjectRepo) CreateWithTx(ctx context.Context, tx *gorm.DB, project *model.Project) error {

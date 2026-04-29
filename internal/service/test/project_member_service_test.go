@@ -153,7 +153,7 @@ func pmBuildTestProjectMember(projectID, userID uint64, role string, user *model
 	}
 
 	if user != nil {
-		pm.User = *user
+		pm.User = user
 	}
 
 	return pm

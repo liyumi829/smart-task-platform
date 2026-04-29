@@ -259,7 +259,7 @@ func (s *ProjectService) ListProjects(ctx context.Context, param *ListProjectsPa
 			StartDate: project.StartDate,
 			EndDate:   project.EndDate,
 			OwnerID:   project.OwnerID,
-			Owner:     buildUserPublicProfile(&project.Owner),
+			Owner:     buildUserPublicProfile(project.Owner),
 		})
 	}
 
@@ -331,7 +331,7 @@ func (s *ProjectService) GetProjectDetail(ctx context.Context, param *GetProject
 		CreatedAt:   project.CreatedAt,
 		UpdatedAt:   project.UpdatedAt,
 		OwnerID:     project.OwnerID,
-		Owner:       buildUserPublicProfile(&project.Owner),
+		Owner:       buildUserPublicProfile(project.Owner),
 	}
 
 	logger.Info("get project detail success")
@@ -471,7 +471,7 @@ func (s *ProjectService) UpdateProject(ctx context.Context, param *UpdateProject
 		EndDate:     project.EndDate,
 		UpdatedAt:   project.UpdatedAt,
 		OwnerID:     project.OwnerID,
-		Owner:       buildUserPublicProfile(&project.Owner),
+		Owner:       buildUserPublicProfile(project.Owner),
 	}
 
 	logger.Info("update project success",

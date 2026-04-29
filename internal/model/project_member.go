@@ -50,9 +50,9 @@ type ProjectMember struct {
 	UpdatedAt time.Time `gorm:"column:updated_at;type:datetime;not null;comment:更新时间" json:"updated_at"`
 
 	// 关联关系
-	Project Project `gorm:"foreignKey:ProjectID;references:ID" json:"project"` // 所属项目
-	User    User    `gorm:"foreignKey:UserID;references:ID" json:"user"`       // 项目成员
-	Inviter *User   `gorm:"foreignKey:InvitedBy;references:ID" json:"inviter"` // 邀请人
+	Project *Project `gorm:"foreignKey:ProjectID;references:ID" json:"project"` // 所属项目
+	User    *User    `gorm:"foreignKey:UserID;references:ID" json:"user"`       // 项目成员
+	Inviter *User    `gorm:"foreignKey:InvitedBy;references:ID" json:"inviter"` // 邀请人
 }
 
 // TableName 指定表名

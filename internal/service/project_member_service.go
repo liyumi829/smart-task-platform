@@ -305,7 +305,7 @@ func (s *ProjectMemberService) ListProjectMembers(ctx context.Context, param *Li
 			ProjectID: projectMember.ProjectID,
 			UserID:    projectMember.UserID,
 			Role:      projectMember.Role,
-			User:      buildUserPublicProfile(&projectMember.User),
+			User:      buildUserPublicProfile(projectMember.User),
 			JoinedAt:  projectMember.JoinedAt,
 		}
 		if projectMember.InvitedBy != nil {
@@ -431,7 +431,7 @@ func (s *ProjectMemberService) UpdateProjectMember(ctx context.Context, param *U
 			ProjectID: projectMember.ProjectID,
 			UserID:    projectMember.UserID,
 			Role:      projectMember.Role,
-			User:      buildUserPublicProfile(&projectMember.User),
+			User:      buildUserPublicProfile(projectMember.User),
 		}, nil
 	}
 
@@ -445,7 +445,7 @@ func (s *ProjectMemberService) UpdateProjectMember(ctx context.Context, param *U
 			ProjectID: projectMember.ProjectID,
 			UserID:    projectMember.UserID,
 			Role:      projectMember.Role,
-			User:      buildUserPublicProfile(&projectMember.User),
+			User:      buildUserPublicProfile(projectMember.User),
 		}, nil
 	}
 
@@ -494,7 +494,7 @@ func (s *ProjectMemberService) UpdateProjectMember(ctx context.Context, param *U
 		ProjectID: projectMember.ProjectID,
 		UserID:    projectMember.UserID,
 		Role:      role,
-		User:      buildUserPublicProfile(&projectMember.User),
+		User:      buildUserPublicProfile(projectMember.User),
 	}, nil
 }
 
