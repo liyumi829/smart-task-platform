@@ -186,6 +186,7 @@ func (s *ProjectMemberService) AddProjectMember(ctx context.Context, param *AddP
 		if err := s.pmr.CreateWithTx(ctx, tx, &model.ProjectMember{
 			ProjectID: param.ProjectID,
 			UserID:    param.InvitedUserID,
+			InvitedBy: &param.InvitorID, // 添加成员一定是被邀请的
 			Role:      role,
 			JoinedAt:  now,
 		}); err != nil {
@@ -300,13 +301,17 @@ func (s *ProjectMemberService) ListProjectMembers(ctx context.Context, param *Li
 			logger.Warn("list project members skipped: nil project member")
 			continue
 		}
-		list = append(list, &dto.ProjectMemberListItem{
+		item := &dto.ProjectMemberListItem{
 			ProjectID: projectMember.ProjectID,
 			UserID:    projectMember.UserID,
 			Role:      projectMember.Role,
 			User:      buildUserPublicProfile(&projectMember.User),
 			JoinedAt:  projectMember.JoinedAt,
-		})
+		}
+		if projectMember.InvitedBy != nil {
+			item.InvitedBy = projectMember.InvitedBy
+		}
+		list = append(list, item)
 	}
 	// 构造成功返回响应
 	logger.Info("list project members success",

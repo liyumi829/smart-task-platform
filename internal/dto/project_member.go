@@ -37,6 +37,7 @@ type ProjectMemberListItem struct {
 	ProjectID uint64             `json:"project_id"`
 	UserID    uint64             `json:"user_id"`
 	Role      string             `json:"role"`
+	InvitedBy *uint64            `json:"invited_by"`
 	User      *UserPublicProfile `json:"user"`
 	JoinedAt  time.Time          `json:"joined_at"`
 }
