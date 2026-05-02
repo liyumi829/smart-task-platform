@@ -62,7 +62,6 @@ func (r *projectRepository) GetByID(ctx context.Context, id uint64) (*model.Proj
 // 说明：要求 model.Project 中存在 Owner 关联字段
 func (r *projectRepository) GetDetailByID(ctx context.Context, id uint64) (*model.Project, error) {
 	var project model.Project
-
 	err := getDB(ctx, r.db, nil).
 		Preload(model.ProjectAssocOwner).
 		Where(model.ProjectColumnID+" = ?", id).
@@ -167,7 +166,7 @@ func (r *projectRepository) SearchProjects(ctx context.Context, query *ProjectSe
 		db = db.Where(model.ProjectColumnStatus+" = ?", query.Status) // 如果状态不为空，就新增筛选
 	}
 
-	// 按关键词模糊匹配
+	// 按关键词前缀匹配
 	if query.Keyword != "" {
 		likePattern := query.Keyword + "%"
 		db = db.Where(model.ProjectColumnName+" LIKE ?", likePattern)
@@ -203,10 +202,6 @@ func (r *projectRepository) SearchProjects(ctx context.Context, query *ProjectSe
 
 // ExistsByProjectID 根据项目ID判断项目是否存在
 func (r *projectRepository) ExistsByProjectID(ctx context.Context, projectID uint64) (bool, error) {
-	if projectID <= 0 {
-		return false, ErrProjectQueryInvalid
-	}
-
 	var count int64
 	err := getDB(ctx, r.db, nil).
 		Model(&model.Project{}).

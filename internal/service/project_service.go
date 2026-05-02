@@ -78,7 +78,7 @@ func (s *ProjectService) CreateProject(ctx context.Context, param *CreateProject
 	}
 
 	// 创建项目的项目描述可以为空，但是不能超过200词/字
-	if param.Description != "" && !isValidDescription(param.Description) {
+	if param.Description != "" && !validator.IsValidDescription(param.Description) {
 		logger.Warn("create project failed: project description is too long")
 		return nil, ErrInvalidProjectDescription
 	}
@@ -384,7 +384,7 @@ func (s *ProjectService) UpdateProject(ctx context.Context, param *UpdateProject
 	}
 
 	// 创建项目的项目描述可以为空，但是不能超过200词/字
-	if param.Description != "" && !isValidDescription(param.Description) {
+	if param.Description != "" && !validator.IsValidDescription(param.Description) {
 		logger.Warn("update project failed: project description is too long")
 		return nil, ErrInvalidProjectDescription
 	}

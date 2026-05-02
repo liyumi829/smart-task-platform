@@ -268,7 +268,7 @@ func (s *UserService) ListUsers(ctx context.Context, page, pageSize int, key str
 		)
 
 		return &dto.UserSearchListResp{
-			List:     []*dto.UserSearchItem{},
+			List:     []*dto.UserListItem{},
 			Total:    0,
 			Page:     page,
 			PageSize: pageSize,
@@ -295,10 +295,10 @@ func (s *UserService) ListUsers(ctx context.Context, page, pageSize int, key str
 		return nil, err
 	}
 
-	userItems := make([]*dto.UserSearchItem, 0, len(users))
+	userItems := make([]*dto.UserListItem, 0, len(users))
 	for _, user := range users {
 		userItems = append(userItems,
-			&dto.UserSearchItem{
+			&dto.UserListItem{
 				ID:       user.ID,
 				Username: user.Username,
 				Nickname: user.Nickname,

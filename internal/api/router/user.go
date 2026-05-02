@@ -23,7 +23,7 @@ func RegisterUserRoutes(
 	{
 		// 公开接口 无需登录
 		// 获取任意用户公开信息
-		userGroup.GET("/:id", userHandler.GetUserPublicInfo)
+		userGroup.GET("/:userId", userHandler.GetUserPublicInfo)
 
 		// 获取用户公开列表
 		userGroup.GET("", userHandler.ListUsers)

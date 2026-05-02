@@ -57,21 +57,24 @@ func main() {
 
 	// 事务管理器、初始化仓储
 	txManager := repository.NewTxManager(db)                       // 事务管理器
-	userRepo := repository.NewUserRepository(db)                   // 用户表
-	projectRepo := repository.NewProjectRepository(db)             // 项目表
-	projectMemberRepo := repository.NewProjectMemberRepository(db) // 项目成员表
+	userRepo := repository.NewUserRepository(db)                   // 用户表仓储
+	projectRepo := repository.NewProjectRepository(db)             // 项目表仓储
+	projectMemberRepo := repository.NewProjectMemberRepository(db) // 项目成员表仓储
+	taskRepo := repository.NewTaskRepository(db)                   // 任务表仓储
 
 	// 初始化服务
-	authService := service.NewAuthService(txManager, userRepo, authStore, jwtManager)                            // 鉴权服务
-	userService := service.NewUserService(txManager, userRepo)                                                   // 用户服务
-	projectService := service.NewProjectService(txManager, userRepo, projectRepo, projectMemberRepo)             // 项目服务
-	projectMemberService := service.NewProjectMemberService(txManager, userRepo, projectRepo, projectMemberRepo) // 项目成员服务
+	authService := service.NewAuthService(txManager, userRepo, authStore, jwtManager)                                      // 鉴权服务
+	userService := service.NewUserService(txManager, userRepo)                                                             // 用户服务
+	projectService := service.NewProjectService(txManager, userRepo, projectRepo, projectMemberRepo)                       // 项目服务
+	projectMemberService := service.NewProjectMemberService(txManager, userRepo, projectRepo, projectMemberRepo, taskRepo) // 项目成员服务
+	taskService := service.NewTaskService(txManager, userRepo, projectRepo, projectMemberRepo, taskRepo)                   // 任务服务
 
 	// 初始化 Handler
 	authHandler := handler.NewAuthHandler(authService)                            // 鉴权 Handler
 	userHandler := handler.NewUserHandler(userService)                            // 用户 Handler
 	projectHandler := handler.NewProjectHandler(projectService)                   // 项目 Handler
 	projectMemberHandler := handler.NewProjectMemberHandler(projectMemberService) // 项目成员 Handler
+	taskHandler := handler.NewTaskHandler(taskService)                            // 任务 Handler
 	// 初始化 Gin
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery())
@@ -87,7 +90,7 @@ func main() {
 	}
 
 	// 注册路由
-	router.Register(r, jwtManager, authStore, authHandler, userHandler, projectHandler, projectMemberHandler)
+	router.Register(r, jwtManager, authStore, authHandler, userHandler, projectHandler, projectMemberHandler, taskHandler)
 
 	// 启动服务
 	addr := net.JoinHostPort(*host, *port)

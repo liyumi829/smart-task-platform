@@ -18,6 +18,7 @@ const (
 	// =========================
 	// 通用错误码 10000+
 	// =========================
+
 	ServerError    = 10000 // 服务器内部错误
 	InvalidParams  = 10001 // 请求参数错误
 	NotFound       = 10002 // 资源不存在
@@ -28,6 +29,7 @@ const (
 	// =========================
 	// 认证/用户模块 20000+
 	// =========================
+
 	AccessTokenMissing     = 20001 // 访问 Token 缺失
 	AccessTokenInvalid     = 20002 // 访问 Token 无效
 	AccessTokenExpired     = 20003 // 访问 Token 已过期
@@ -51,6 +53,7 @@ const (
 	// =========================
 	// 项目模块 30000+
 	// =========================
+
 	ProjectNotFound            = 30001 // 项目不存在
 	ProjectArchived            = 30002 // 项目已归档
 	ProjectNoPermission        = 30003 // 无项目操作权限
@@ -64,6 +67,25 @@ const (
 	InvalidProjectMemberRole   = 30011 // 项目成员角色不正确
 	ProjectMemberAlreadyExists = 30012 // 项目成员已存在
 	ExceededAdminMemberLimit   = 30013 // 项目管理员数量已达上限
+
+	// =========================
+	// 任务模块 40000+
+	// =========================
+
+	TaskNotFound                 = 40001 // 任务不存在
+	TaskNoPermission             = 40002 // 无任务操作权限
+	EmptyTaskTitle               = 40003 // 任务标题为空
+	InvalidTaskTitleFormat       = 40004 // 任务标题格式不正确
+	InvalidTaskDescriptionFormat = 40005 // 任务描述格式不正确
+	InvalidTaskPriorityFormat    = 40006 // 任务优先级格式不正确
+	InvalidTaskStatusFormat      = 40007 // 任务状态格式不正确
+	InvalidTaskTimeFormat        = 40008 // 任务时间格式不正确
+	AssigneeNotFound             = 40009 // 负责人用户不存在
+	AssigneeNotProjectMember     = 40010 // 负责人不是项目成员
+	InvalidTaskSortByFormat      = 40011 // 任务排序规则格式不正确
+	InvalidTaskSortOrderFormat   = 40012 // 任务排序顺序格式不正确
+	InvalidTaskSortItem          = 40013 // 任务排序表项不合法
+	EmptyTaskSortItem            = 40014 // 任务排序表项为空
 )
 
 // codeMsgMap 错误码与错误信息映射
@@ -134,6 +156,24 @@ var codeMsgMap = map[int]string{
 	InvalidProjectMemberRole:   "Invalid project member role",
 	ProjectMemberAlreadyExists: "Project member already exists",
 	ExceededAdminMemberLimit:   "Project admin member limit has been reached",
+
+	// =========================
+	// 任务错误信息
+	// =========================
+	TaskNotFound:                 "Task not found",
+	TaskNoPermission:             "No permission to operate this task",
+	EmptyTaskTitle:               "Task title cannot be empty",
+	InvalidTaskTitleFormat:       "Invalid task title format",
+	InvalidTaskDescriptionFormat: "Invalid task description format",
+	InvalidTaskPriorityFormat:    "Invalid task priority format",
+	InvalidTaskStatusFormat:      "Invalid task status format",
+	InvalidTaskTimeFormat:        "Invalid task time format",
+	AssigneeNotFound:             "Assignee user not found",
+	AssigneeNotProjectMember:     "Assignee is not a project member",
+	InvalidTaskSortByFormat:      "Invalid task sort by format",
+	InvalidTaskSortOrderFormat:   "Invalid task sort order format",
+	InvalidTaskSortItem:          "Invalid task sort item",
+	EmptyTaskSortItem:            "Task sort item cannot be empty",
 }
 
 // GetMsg 根据错误码获取错误信息

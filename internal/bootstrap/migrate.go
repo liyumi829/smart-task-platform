@@ -25,6 +25,7 @@ func AutoMigrate(db *gorm.DB) error {
 		&model.User{},
 		&model.Project{},
 		&model.ProjectMember{},
+		&model.Task{},
 	); err != nil {
 		zap.L().Error("AutoMigrate failed", zap.Error(err))
 		return fmt.Errorf("auto migrate failed: %w", err)

@@ -41,4 +41,21 @@ var (
 	ErrEmptyProjectMemberRole     = errors.New("project member role cannot be empty") // 项目成员角色不能为空
 	ErrProjectMemberAlreadyExists = errors.New("project member already exists")       // 项目成员已存在
 	ErrExceedsAdminMemberLimit    = errors.New("admin member limit exceeded")         // 管理员人数已达上限
+
+	ErrTaskNotFound             = errors.New("task not found")                  // 任务没有找到
+	ErrInvalidTaskParam         = errors.New("invalid task parameter")          // 非法的任务参数
+	ErrEmptyTaskTitle           = errors.New("task title cannot be empty")      // 任务标题为空
+	ErrInvalidTaskTitle         = errors.New("invalid task title")              // 不合法的标题名称
+	ErrInvalidTaskDescription   = errors.New("invalid task description")        // 非法的任务描述
+	ErrInvalidTaskPriority      = errors.New("invalid task priority")           // 不合法的优先级
+	ErrInvalidTaskTime          = errors.New("invalid task time")               // 不合法的时间
+	ErrInvalidTaskStatus        = errors.New("invalid task status")             // 不合法的任务状态
+	ErrAssigneeNotFount         = errors.New("assignee is not found")           // 负责人不存在
+	ErrAssigneeNotProjectMember = errors.New("assignee is not project member")  // 负责人不是项目成员
+	ErrTaskForbidden            = errors.New("task forbidden")                  // 任务权限不允许
+	ErrInvalidTaskSortBy        = errors.New("invalid task sort by")            // 不合法的排序规则
+	ErrInvalidTaskSortOrder     = errors.New("invalid task sort order")         // 不合法的排序顺序
+	ErrInvalidTaskSortOrderItem = errors.New("invalid task sort order item")    // 错误的任务排序表项
+	ErrEmptyTaskSortItems       = errors.New("task sort items cannot be empty") // 排序表项为空
+	ErrTaskSortNoRowsUpdated    = errors.New("task sort no rows updated")       // 批量更新数据没有受到影响
 )

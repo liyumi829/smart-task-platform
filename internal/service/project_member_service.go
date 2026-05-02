@@ -26,6 +26,7 @@ type ProjectMemberService struct {
 	ur    projectMemberSvcUserRepo          // 用户仓储接口
 	pr    projectMemberSvcProjectRepo       // 项目仓储接口
 	pmr   projectMemberSvcProjectMemberRepo // 项目成员仓储接口
+	tr    projectMemberSvcTaskRepo          // 任务仓储接口
 }
 
 // NewProjectMemberService 创建项目成员服务实例
@@ -34,12 +35,14 @@ func NewProjectMemberService(
 	userRepo projectMemberSvcUserRepo,
 	projectRepo projectMemberSvcProjectRepo,
 	projectMemberRepo projectMemberSvcProjectMemberRepo,
+	taskRepo projectMemberSvcTaskRepo,
 ) *ProjectMemberService {
 	return &ProjectMemberService{
 		txMgr: txMgr,
 		ur:    userRepo,
 		pr:    projectRepo,
 		pmr:   projectMemberRepo,
+		tr:    taskRepo,
 	}
 }
 
@@ -151,7 +154,7 @@ func (s *ProjectMemberService) AddProjectMember(ctx context.Context, param *AddP
 		return nil, ErrProjectForbidden
 	}
 
-	// 判断被邀请用户是否已经是项目成员
+	// 判断被邀请用户是否已经是有效项目成员
 	ok, err = s.pmr.ExistsByProjectIDAndUserID(ctx, param.ProjectID, param.InvitedUserID)
 	if err != nil {
 		logger.Error("add project member failed: check project member exists error", zap.Error(err))
@@ -159,6 +162,28 @@ func (s *ProjectMemberService) AddProjectMember(ctx context.Context, param *AddP
 	}
 	if ok {
 		logger.Warn("add project member failed: user already exists in project")
+		return nil, ErrProjectMemberAlreadyExists
+	}
+
+	// 查询是否存在软删除的项目成员记录
+	deletedProjectMember, err := s.pmr.GetProjectMemberByProjectIDAndUserIDUnscoped(
+		ctx,
+		param.ProjectID,
+		param.InvitedUserID,
+	)
+	if err != nil {
+		if !errors.Is(err, repository.ErrProjectMemberNotFound) {
+			logger.Error("add project member failed: get project member unscoped error", zap.Error(err))
+			return nil, err
+		}
+
+		// 没有历史记录，后续直接创建
+		deletedProjectMember = nil
+	}
+
+	// 如果存在未删除记录，说明成员已经存在，做防御性判断
+	if deletedProjectMember != nil && !deletedProjectMember.DeletedAt.Valid {
+		logger.Warn("add project member failed: user already exists in project by unscoped query")
 		return nil, ErrProjectMemberAlreadyExists
 	}
 
@@ -181,14 +206,36 @@ func (s *ProjectMemberService) AddProjectMember(ctx context.Context, param *AddP
 
 	now := time.Now()
 
-	// 执行事务，添加项目成员
+	// 执行事务：
+	// 1. 如果存在软删除记录，则恢复 deleted_at = NULL，并更新角色、邀请人、加入时间、更新时间
+	// 2. 如果不存在历史记录，则创建新的项目成员记录
 	err = s.txMgr.Transaction(ctx, func(tx *gorm.DB) error {
+		if deletedProjectMember != nil && deletedProjectMember.DeletedAt.Valid {
+			if err := s.pmr.RestoreProjectMemberWithTx(ctx, tx,
+				&repository.RestoreProjectMemberWithTxParam{
+					ProjectID: param.ProjectID,
+					UserID:    param.InvitedUserID,
+					Role:      role,
+					InvitedBy: &param.InvitorID,
+					UpdatedAt: now,
+					JoinedAt:  now,
+				},
+			); err != nil {
+				logger.Error("add project member failed: restore deleted project member db error", zap.Error(err))
+				return err
+			}
+
+			return nil
+		}
+
 		if err := s.pmr.CreateWithTx(ctx, tx, &model.ProjectMember{
 			ProjectID: param.ProjectID,
 			UserID:    param.InvitedUserID,
 			InvitedBy: &param.InvitorID, // 添加成员一定是被邀请的
 			Role:      role,
 			JoinedAt:  now,
+			CreatedAt: now,
+			UpdatedAt: now,
 		}); err != nil {
 			logger.Error("add project member failed: create project member db error", zap.Error(err))
 			return err
@@ -498,6 +545,185 @@ func (s *ProjectMemberService) UpdateProjectMember(ctx context.Context, param *U
 	}, nil
 }
 
+// RemoveProjectMemberParam 移除项目成员参数
+type RemoveProjectMemberParam struct {
+	OperatorID    uint64
+	ProjectID     uint64
+	RemovedUserID uint64
+}
+
+// RemoveProjectMember 移除项目成员
+func (s *ProjectMemberService) RemoveProjectMember(ctx context.Context, param *RemoveProjectMemberParam) (*dto.RemoveProjectMemberResp, error) {
+	// 参数校验
+	if param == nil {
+		zap.L().Warn("remove project member failed: invalid param")
+		return nil, ErrInvalidProjectMemberParam
+	}
+	if param.OperatorID <= 0 || param.ProjectID <= 0 || param.RemovedUserID <= 0 {
+		zap.L().Warn("remove project member failed: invalid ids",
+			zap.Uint64("project_id", param.ProjectID),
+			zap.Uint64("operator_id", param.OperatorID),
+			zap.Uint64("removed_user_id", param.RemovedUserID),
+		)
+		return nil, ErrInvalidProjectMemberParam
+	}
+
+	// 使用 With 复用日志字段，避免后续日志重复写 project_id、operator_id、removed_user_id
+	logger := zap.L().With(
+		zap.Uint64("project_id", param.ProjectID),
+		zap.Uint64("operator_id", param.OperatorID),
+		zap.Uint64("removed_user_id", param.RemovedUserID),
+	)
+
+	// 参数校验完成，逻辑判断
+	// 项目要存在、用户要存在
+	// 操作者权限： owner 可删 admin、member 不可以删 owner（自己）；admin 可删 member 不能删owner、admin
+	ok, err := s.pr.ExistsByProjectID(ctx, param.ProjectID)
+	if err != nil {
+		logger.Error("remove project member failed: check project exists error", zap.Error(err))
+		return nil, err
+	}
+	if !ok {
+		logger.Warn("remove project member failed: project not found")
+		return nil, ErrProjectNotFound
+	}
+
+	// 项目存在，下一步判断用户是否存在
+	// 这里校验的是操作者是否为项目成员
+	operatorRole, err := s.pmr.GetProjectMemberRoleByProjectIDAndUserID(ctx, param.ProjectID, param.OperatorID)
+	if err != nil {
+		if errors.Is(err, repository.ErrProjectMemberNotFound) {
+			logger.Warn("remove project member failed: operator is not project member")
+			return nil, ErrProjectMemberNotFound // 上层业务处理成权限不足
+		}
+
+		logger.Error("remove project member failed: get operator role error", zap.Error(err))
+		return nil, err
+	}
+
+	// 这里校验的是被移除用户是否为项目成员
+	removedUserRole, err := s.pmr.GetProjectMemberRoleByProjectIDAndUserID(ctx, param.ProjectID, param.RemovedUserID)
+	if err != nil {
+		if errors.Is(err, repository.ErrProjectMemberNotFound) {
+			logger.Warn("remove project member failed: removed user is not project member")
+			return nil, ErrProjectMemberNotFound // 上层业务处理成权限不足
+		}
+
+		logger.Error("remove project member failed: get removed user role error", zap.Error(err))
+		return nil, err
+	}
+	logger = logger.With(
+		zap.String("operator_role", operatorRole),
+		zap.String("removed_user_role", removedUserRole),
+	)
+	// 权限等级大的可以删除小的，平级不能删除 0 代表等级最大
+	// 这也保证了最后一定剩余一个 owner！
+
+	// 为什么不直接通过 map 来比较，为了得到对应的错误信息
+
+	// 不允许通过移除成员接口移除自己
+	// 如果需要退出项目，单独设计 LeaveProject 接口处理
+	if param.OperatorID == param.RemovedUserID {
+		logger.Warn("remove project member failed: operator cannot remove self")
+		return nil, ErrProjectForbidden
+	}
+
+	// 不允许移除 owner
+	// owner 转让应该通过 UpdateProjectMember 修改 owner 的逻辑完成
+	if removedUserRole == model.ProjectMemberRoleOwner {
+		logger.Warn("remove project member failed: cannot remove owner")
+		return nil, ErrProjectForbidden
+	}
+
+	// 权限等级大的可以删除小的，平级不能删除 0 代表等级最大
+	// 这也保证了最后一定剩余一个 owner！
+	operatorLevel, ok := model.RoleLevel[operatorRole]
+	if !ok {
+		logger.Error("remove project member failed: invalid operator role")
+		return nil, ErrInvalidProjectMemberRole
+	}
+	removedUserLevel, ok := model.RoleLevel[removedUserRole]
+	if !ok {
+		logger.Error("remove project member failed: invalid removed user role")
+		return nil, ErrInvalidProjectMemberRole
+	}
+
+	// 如果操作者的权限小于删除者
+	if operatorLevel >= removedUserLevel {
+		logger.Warn("remove project member failed: permission denied",
+			zap.Int("operator_level", operatorLevel),
+			zap.Int("removed_user_level", removedUserLevel),
+		)
+		return nil, ErrProjectForbidden
+	}
+
+	updatedAt := time.Now()
+
+	// 使用事务保证：
+	// 1. 移除项目成员
+	// 2. 清空该成员在当前项目下负责的任务负责人
+	err = s.txMgr.Transaction(ctx, func(tx *gorm.DB) error {
+		if err := s.pmr.SoftDeleteProjectMember(ctx, tx, param.ProjectID, param.RemovedUserID); err != nil {
+			return err
+		}
+
+		if err := s.tr.ClearTaskAssigneeByProjectIDAndAssigneeIDWithTx(
+			ctx,
+			tx,
+			param.ProjectID,
+			param.RemovedUserID,
+			updatedAt,
+		); err != nil {
+			return err
+		}
+
+		return nil
+	})
+	if err != nil {
+		logger.Error("remove project member failed: transaction rollback", zap.Error(err))
+		return nil, err
+	}
+
+	logger.Info("remove project member success")
+	return &dto.RemoveProjectMemberResp{}, nil
+}
+
+// projectMemberSvcUserRepo 用户仓储接口
+type projectMemberSvcUserRepo interface {
+	GetByID(ctx context.Context, id uint64) (*model.User, error)
+}
+
+// projectMemberSvcProjectRepo 项目仓储接口
+type projectMemberSvcProjectRepo interface {
+	ExistsByProjectID(ctx context.Context, id uint64) (bool, error)
+}
+
+// projectMemberSvcProjectMemberRepo 项目成员仓储接口
+type projectMemberSvcProjectMemberRepo interface {
+	CreateWithTx(ctx context.Context, tx *gorm.DB, projectMember *model.ProjectMember) error
+	SearchProjectMembers(ctx context.Context, query *repository.ProjectMemberSearchQuery) ([]*model.ProjectMember, int64, error)
+	UpdateProjectMemberRole(ctx context.Context, tx *gorm.DB, projectID, userID uint64, role string) error
+	SoftDeleteProjectMember(ctx context.Context, tx *gorm.DB, projectID, userID uint64) error
+
+	ExistsByProjectIDAndUserID(ctx context.Context, projectID, userID uint64) (bool, error)
+	GetProjectMemberByProjectIDAndUserID(ctx context.Context, projectID, userID uint64) (*model.ProjectMember, error)
+	CountByProjectIDAndRole(ctx context.Context, projectID uint64, role string) (int64, error)
+	GetProjectMemberRoleByProjectIDAndUserID(ctx context.Context, projectID, userID uint64) (string, error)
+	GetProjectMemberByProjectIDAndUserIDUnscoped(ctx context.Context, projectID uint64, userID uint64) (*model.ProjectMember, error)
+	RestoreProjectMemberWithTx(ctx context.Context, tx *gorm.DB, param *repository.RestoreProjectMemberWithTxParam) error
+}
+
+// projectMemberSvcTaskRepo 任务仓储接口
+type projectMemberSvcTaskRepo interface {
+	ClearTaskAssigneeByProjectIDAndAssigneeIDWithTx(
+		ctx context.Context,
+		tx *gorm.DB,
+		projectID uint64,
+		assigneeID uint64,
+		updatedAt time.Time,
+	) error
+}
+
 // transferOwner 转让项目 owner
 func (s *ProjectMemberService) transferOwner(
 	ctx context.Context,
@@ -576,157 +802,4 @@ func (s *ProjectMemberService) updateToMember(
 
 		return nil
 	})
-}
-
-// RemoveProjectMemberParam 移除项目成员参数
-type RemoveProjectMemberParam struct {
-	OperatorID    uint64
-	ProjectID     uint64
-	RemovedUserID uint64
-}
-
-// RemoveProjectMember 移除项目成员
-func (s *ProjectMemberService) RemoveProjectMember(ctx context.Context, param *RemoveProjectMemberParam) (*dto.RemoveProjectMemberResp, error) {
-	// 参数校验
-	if param == nil {
-		zap.L().Warn("remove project member failed: invalid param")
-		return nil, ErrInvalidProjectMemberParam
-	}
-	if param.OperatorID <= 0 || param.ProjectID <= 0 || param.RemovedUserID <= 0 {
-		zap.L().Warn("remove project member failed: invalid ids",
-			zap.Uint64("project_id", param.ProjectID),
-			zap.Uint64("operator_id", param.OperatorID),
-			zap.Uint64("removed_user_id", param.RemovedUserID),
-		)
-		return nil, ErrInvalidProjectMemberParam
-	}
-
-	// 使用 With 复用日志字段，避免后续日志重复写 project_id、operator_id、removed_user_id
-	logger := zap.L().With(
-		zap.Uint64("project_id", param.ProjectID),
-		zap.Uint64("operator_id", param.OperatorID),
-		zap.Uint64("removed_user_id", param.RemovedUserID),
-	)
-
-	// 参数校验完成，逻辑判断
-	// 项目要存在、用户要存在
-	// 操作者权限： owner 可删 admin、member 不可以删 owner（自己）；admin 可删 member 不能删owner、admin
-	ok, err := s.pr.ExistsByProjectID(ctx, param.ProjectID)
-	if err != nil {
-		logger.Error("remove project member failed: check project exists error", zap.Error(err))
-		return nil, err
-	}
-	if !ok {
-		logger.Warn("remove project member failed: project not found")
-		return nil, ErrProjectNotFound
-	}
-
-	// 项目存在，下一步判断用户是否存在
-	// 这里校验的是操作者是否为项目成员
-	operatorRole, err := s.pmr.GetProjectMemberRoleByProjectIDAndUserID(ctx, param.ProjectID, param.OperatorID)
-	if err != nil {
-		if errors.Is(err, repository.ErrProjectMemberNotFound) {
-			logger.Warn("remove project member failed: operator is not project member")
-			return nil, ErrProjectMemberNotFound // 上层业务处理成权限不足
-		}
-
-		logger.Error("remove project member failed: get operator role error", zap.Error(err))
-		return nil, err
-	}
-
-	// 这里校验的是被移除用户是否为项目成员
-	removedUserRole, err := s.pmr.GetProjectMemberRoleByProjectIDAndUserID(ctx, param.ProjectID, param.RemovedUserID)
-	if err != nil {
-		if errors.Is(err, repository.ErrProjectMemberNotFound) {
-			logger.Warn("remove project member failed: removed user is not project member")
-			return nil, ErrProjectMemberNotFound // 上层业务处理成权限不足
-		}
-
-		logger.Error("remove project member failed: get removed user role error", zap.Error(err))
-		return nil, err
-	}
-	logger = logger.With(
-		zap.String("operator_role", operatorRole),
-		zap.String("removed_user_role", removedUserRole),
-	)
-	// 权限等级大的可以删除小的，平级不能删除 0 代表等级最大
-	// 这也保证了最后一定剩余一个 owner！
-
-	// 为什么不直接通过 map 来比较，为了得到对应的错误信息
-
-	// 不允许通过移除成员接口移除自己
-	// 如果需要退出项目，建议单独设计 LeaveProject 接口处理
-	if param.OperatorID == param.RemovedUserID {
-		logger.Warn("remove project member failed: operator cannot remove self")
-		return nil, ErrProjectForbidden
-	}
-
-	// 不允许移除 owner
-	// owner 转让应该通过 UpdateProjectMember 修改 owner 的逻辑完成
-	if removedUserRole == model.ProjectMemberRoleOwner {
-		logger.Warn("remove project member failed: cannot remove owner")
-		return nil, ErrProjectForbidden
-	}
-
-	// 权限等级大的可以删除小的，平级不能删除 0 代表等级最大
-	// 这也保证了最后一定剩余一个 owner！
-	operatorLevel, ok := model.RoleLevel[operatorRole]
-	if !ok {
-		logger.Error("remove project member failed: invalid operator role")
-		return nil, ErrInvalidProjectMemberRole
-	}
-	removedUserLevel, ok := model.RoleLevel[removedUserRole]
-	if !ok {
-		logger.Error("remove project member failed: invalid removed user role")
-		return nil, ErrInvalidProjectMemberRole
-	}
-
-	// 如果操作者的权限小于删除者
-	if operatorLevel >= removedUserLevel {
-		logger.Warn("remove project member failed: permission denied",
-			zap.Int("operator_level", operatorLevel),
-			zap.Int("removed_user_level", removedUserLevel),
-		)
-		return nil, ErrProjectForbidden
-	}
-
-	// 移除
-	err = s.txMgr.Transaction(ctx, func(tx *gorm.DB) error {
-		if err := s.pmr.RemoveProjectMember(ctx, tx, param.ProjectID, param.RemovedUserID); err != nil {
-			logger.Error("remove project member failed: remove project member db error", zap.Error(err))
-			return err
-		}
-
-		return nil
-	})
-	if err != nil {
-		logger.Error("remove project member failed: transaction rollback", zap.Error(err))
-		return nil, err
-	}
-
-	logger.Info("remove project member success")
-	return &dto.RemoveProjectMemberResp{}, nil
-}
-
-// projectMemberSvcUserRepo 用户仓储接口
-type projectMemberSvcUserRepo interface {
-	GetByID(ctx context.Context, id uint64) (*model.User, error)
-}
-
-// projectMemberSvcProjectRepo 项目仓储接口
-type projectMemberSvcProjectRepo interface {
-	ExistsByProjectID(ctx context.Context, id uint64) (bool, error)
-}
-
-// projectMemberSvcProjectMemberRepo 项目仓储仓储接口
-type projectMemberSvcProjectMemberRepo interface {
-	CreateWithTx(ctx context.Context, tx *gorm.DB, projectMember *model.ProjectMember) error
-	SearchProjectMembers(ctx context.Context, query *repository.ProjectMemberSearchQuery) ([]*model.ProjectMember, int64, error)
-	UpdateProjectMemberRole(ctx context.Context, tx *gorm.DB, projectID, userID uint64, role string) error
-	RemoveProjectMember(ctx context.Context, tx *gorm.DB, projectID, userID uint64) error
-
-	ExistsByProjectIDAndUserID(ctx context.Context, projectID, userID uint64) (bool, error)
-	GetProjectMemberByProjectIDAndUserID(ctx context.Context, projectID, userID uint64) (*model.ProjectMember, error)
-	CountByProjectIDAndRole(ctx context.Context, projectID uint64, role string) (int64, error)
-	GetProjectMemberRoleByProjectIDAndUserID(ctx context.Context, projectID, userID uint64) (string, error)
 }

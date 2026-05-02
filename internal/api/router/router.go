@@ -20,6 +20,7 @@ func Register(
 	userHandler *handler.UserHandler,
 	projectHandler *handler.ProjectHandler,
 	projectMemberHandler *handler.ProjectMemberHandler,
+	taskHandler *handler.TaskHandler,
 ) {
 	r.GET("/ping",
 		func(c *gin.Context) {
@@ -36,6 +37,7 @@ func Register(
 		RegisterUserRoutes(api, userHandler, jwtMgr, authStore)                   // 注册用户模块路由
 		RegisterProjectRoutes(api, projectHandler, jwtMgr, authStore)             // 注册项目模块路由
 		RegisterProjectMemberRoutes(api, projectMemberHandler, jwtMgr, authStore) // 注册项目成员模块路由
+		RegisterTaskRoutes(api, taskHandler, jwtMgr, authStore)                   // 注册任务模块路由
 		// 其他模块的路由注册函数也会在这里调用，例如：
 		// RegisterTaskRoutes(api, taskHandler, jwtMgr) // 注册任务模块路由
 		// RegisterProjectRoutes(api, projectHandler, jwtMgr) // 注册项目模块路由

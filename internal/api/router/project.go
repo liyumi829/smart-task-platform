@@ -30,12 +30,12 @@ func RegisterProjectRoutes(
 		privateGroup.GET("", projectHandler.ListProjects)
 
 		// 获取项目详细情况
-		privateGroup.GET("/:id", projectHandler.GetProjectDetail)
+		privateGroup.GET("/:projectId", projectHandler.GetProjectDetail)
 
 		// 更新项目数据
-		privateGroup.PUT("/:id", projectHandler.UpdateProject)
+		privateGroup.PUT("/:projectId", projectHandler.UpdateProject)
 
 		// 归档项目
-		privateGroup.PATCH("/:id/archive", projectHandler.ArchiveProject)
+		privateGroup.PATCH("/:projectId/archive", projectHandler.ArchiveProject)
 	}
 }

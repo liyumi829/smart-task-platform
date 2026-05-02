@@ -11,7 +11,6 @@ import (
 	"smart-task-platform/internal/repository"
 	"strings"
 	"time"
-	"unicode/utf8"
 
 	"go.uber.org/zap"
 )
@@ -67,11 +66,66 @@ func isValidProjectStatus(status string) bool {
 	}
 }
 
+// isValidTaskPriority 校验任务优先级是否为合法值
+func isValidTaskPriority(priority string) bool {
+	switch priority {
+	case model.TaskPriorityHigh,
+		model.TaskPriorityUrgent,
+		model.TaskPriorityMedium,
+		model.TaskPriorityLow:
+		return true
+	default:
+		return false
+	}
+}
+
+// isValidTaskStatus 校验任务状态是否为合法值
+func isValidTaskStatus(status string) bool {
+	switch status {
+	case model.TaskStatusTodo,
+		model.TaskStatusInProgress,
+		model.TaskStatusDone,
+		model.TaskStatusCancelled:
+		return true
+	default:
+		return false
+	}
+}
+
+// isValidTaskSortBy 检验排序规则是否是合法值
+func isValidTaskSortBy(sortBy string) bool {
+	switch sortBy {
+	case dto.SortByPriority,
+		dto.SortByStatus,
+		dto.SortByTitle,
+		dto.SortByDueDate,
+		dto.SortByCreateTime:
+		return true
+
+	default:
+		return false
+	}
+}
+
+// isValidTaskSortOrder 检查排序顺序是否合法值
+func IsValidTaskSortOrder(sortOrder string) bool {
+	switch sortOrder {
+	case
+		dto.UpperAsc,
+		dto.UpperDesc,
+		dto.LowerAsc,
+		dto.LowerDesc:
+		return true
+	default:
+		return false
+	}
+}
+
 // buildUserPublicProfile 构造用户公开信息 DTO
 func buildUserPublicProfile(user *model.User) *dto.UserPublicProfile {
 	// 未预加载 Owner 或 Owner 数据异常时，返回 nil
 	// 空值保护
-	if user.ID <= 0 {
+	if user == nil {
 		return nil
 	}
 
@@ -83,9 +137,42 @@ func buildUserPublicProfile(user *model.User) *dto.UserPublicProfile {
 	}
 }
 
-// isValidDescription 控制描述在 200 字以内
-func isValidDescription(s string) bool {
-	return utf8.RuneCountInString(s) <= 10
+// buildTaskBaseFields 构造任务基础信息 DTO
+func buildTaskBaseFields(task *model.Task) *dto.TaskBaseFields {
+	// 空值保护
+	if task == nil {
+		return nil
+	}
+
+	return &dto.TaskBaseFields{
+		ID:         task.ID,
+		ProjectID:  task.ProjectID,
+		Title:      task.Title,
+		Status:     task.Status,
+		Priority:   task.Priority,
+		AssigneeID: task.AssigneeID,
+		DueDate:    task.DueDate,
+		CreatedAt:  task.CreatedAt,
+		UpdatedAt:  task.UpdatedAt,
+	}
+}
+
+// buildProjectPublicProfile 构造任务基础信息 DTO
+func buildProjectPublicProfile(project *model.Project) *dto.ProjectPublicProfile {
+	// 空值保护
+	if project == nil {
+		return nil
+	}
+
+	return &dto.ProjectPublicProfile{
+		ID:   project.ID,
+		Name: project.Name,
+	}
+}
+
+// roleLevelInvoker 项目成员角色等级查询接口
+type roleLevelInvoker interface {
+	GetProjectMemberByProjectIDAndUserID(ctx context.Context, projectID, userID uint64) (*model.ProjectMember, error)
 }
 
 // getProjectMemberRoleLevel 获取项目成员角色和角色权限等级
@@ -98,13 +185,13 @@ func isValidDescription(s string) bool {
 // 数字越小，权限越高。
 func getProjectMemberRoleLevel(
 	ctx context.Context,
-	pmr roleLevelInvoker,
+	invoker roleLevelInvoker,
 	projectID uint64,
 	userID uint64,
 	logger *zap.Logger,
 ) (string, int, error) {
 	// 查询用户在项目中的成员信息
-	member, err := pmr.GetProjectMemberByProjectIDAndUserID(ctx, projectID, userID)
+	member, err := invoker.GetProjectMemberByProjectIDAndUserID(ctx, projectID, userID)
 	if err != nil {
 		if errors.Is(err, repository.ErrProjectMemberNotFound) {
 			logger.Warn("project member role level check failed: project member not found",
@@ -136,7 +223,58 @@ func getProjectMemberRoleLevel(
 	return member.Role, level, nil
 }
 
-// roleLevelInvoker 项目成员角色等级查询接口
-type roleLevelInvoker interface {
-	GetProjectMemberByProjectIDAndUserID(ctx context.Context, projectID, userID uint64) (*model.ProjectMember, error)
+// projectRoleInvoker 项目成员角色查询接口
+type projectRoleInvoker interface {
+	GetProjectMemberRoleByProjectIDAndUserID(ctx context.Context, projectID, userID uint64) (string, error)
+}
+
+// hasProjectManagePermission 判断用户在项目中是否具有管理权限
+//
+// 会判断 UserID 是否存在
+//
+// 会判断 ProjectID 是否存在
+//   - 不存在都当作是无权限
+func hasProjectManagePermission(
+	ctx context.Context,
+	invoker projectRoleInvoker,
+	projectID uint64,
+	userID uint64,
+	logger *zap.Logger,
+) (bool, error) {
+	// 查询用户在项目中的角色
+	role, err := invoker.GetProjectMemberRoleByProjectIDAndUserID(ctx, projectID, userID)
+	if err != nil {
+		if errors.Is(err, repository.ErrProjectMemberNotFound) {
+			logger.Warn("project manage permission check failed: project member not found",
+				zap.Uint64("project_id", projectID),
+				zap.Uint64("user_id", userID),
+			)
+			return false, ErrProjectMemberNotFound
+		}
+
+		logger.Error("project manage permission check failed: get project member role error",
+			zap.Uint64("project_id", projectID),
+			zap.Uint64("user_id", userID),
+			zap.Error(err),
+		)
+		return false, err
+	}
+
+	// 判断角色是否具有项目管理权限
+	if role == model.ProjectMemberRoleAdmin || role == model.ProjectMemberRoleOwner {
+		logger.Debug("project manage permission check success: permission granted",
+			zap.Uint64("project_id", projectID),
+			zap.Uint64("user_id", userID),
+			zap.String("member_role", role),
+		)
+		return true, nil
+	}
+
+	logger.Warn("project manage permission check failed: permission denied",
+		zap.Uint64("project_id", projectID),
+		zap.Uint64("user_id", userID),
+		zap.String("member_role", role),
+	)
+
+	return false, nil
 }

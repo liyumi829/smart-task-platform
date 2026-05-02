@@ -213,3 +213,18 @@ func (r *userRepository) SearchUsers(ctx context.Context, query *UserSearchQuery
 
 	return users, total, nil
 }
+
+// ExistsByUserID 根据用户ID判断用户是否存在
+func (r *userRepository) ExistsByUserID(ctx context.Context, userID uint64) (bool, error) {
+	var count int64
+	err := getDB(ctx, r.db, nil).
+		Model(&model.User{}).
+		Where(model.UserColumnID+" = ?", userID).
+		Limit(1).
+		Count(&count).Error
+	if err != nil {
+		return false, err
+	}
+
+	return count > 0, nil
+}

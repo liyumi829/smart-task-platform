@@ -19,11 +19,11 @@ func RegisterProjectMemberRoutes(
 	authStore *authredis.RedisAuthStore,
 ) {
 	// 项目成员路由组：
-	// /api/v1/projects/:id/members
+	// /api/v1/projects/:projectId/members
 	//
-	// :id 表示 project_id
+	// :projectId 表示 projectID
 	// userId 表示对哪一个用户资源
-	memberGroup := api.Group("/projects/:id/members")
+	memberGroup := api.Group("/projects/:projectId/members")
 	memberGroup.Use(middleware.JWTAuth(jwtManager, authStore))
 	{
 		// 添加项目成员

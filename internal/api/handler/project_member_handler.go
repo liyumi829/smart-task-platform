@@ -49,7 +49,7 @@ func (h *ProjectMemberHandler) AddProjectMember(c *gin.Context) {
 	}
 	// 解析成功，构造请求响应
 	invitorID := contextx.GetUserID(c) // 获取邀请者ID
-	projectID := uri.ID                // 项目ID
+	projectID := uri.ProjectID         // 项目ID
 
 	// 追加业务字段，避免后续日志重复传递
 	logger = logger.With(
@@ -149,7 +149,7 @@ func (h *ProjectMemberHandler) ListProjectMembers(c *gin.Context) {
 	}
 
 	userID := contextx.GetUserID(c) // 操作用户ID
-	projectID := uri.ID             // 项目ID
+	projectID := uri.ProjectID      // 项目ID
 
 	// 追加业务字段，避免后续日志重复传递
 	logger = logger.With(
@@ -229,7 +229,7 @@ func (h *ProjectMemberHandler) UpdateProjectMember(c *gin.Context) {
 
 	modifierID := contextx.GetUserID(c) // 修改者用户ID
 	modifiedUserID := uri.UserID        // 被修改用户ID
-	projectID := uri.ID                 // 项目ID
+	projectID := uri.ProjectID          // 项目ID
 
 	role := ""
 	if req.Role != nil {
@@ -312,7 +312,7 @@ func (h *ProjectMemberHandler) RemoveProjectMember(c *gin.Context) {
 	}
 
 	operatorID := contextx.GetUserID(c) // 操作者用户ID
-	projectID := uri.ID                 // 项目ID
+	projectID := uri.ProjectID          // 项目ID
 	removedUserID := uri.UserID         // 被移除用户ID
 
 	// 追加业务字段，避免后续日志重复传递

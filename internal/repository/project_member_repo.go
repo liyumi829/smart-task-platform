@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"smart-task-platform/internal/model"
 
@@ -47,14 +48,14 @@ type ProjectMemberSearchQuery struct {
 	PageSize  int    // 每页数量
 	ProjectID uint64 // 项目 ID
 	Role      string // 成员角色
-	Keyword   string // 关键词：用户名/昵称模糊匹配
+	Keyword   string // 关键词：用户名前缀匹配
 }
 
 // SearchProjectMembers 搜索项目成员
 // 支持：
 //  1. 按项目 ID 查询
 //  2. 按角色筛选
-//  3. 按用户名/昵称模糊查询
+//  3. 按用户名前缀查询
 //  4. 分页
 func (r *projectMemberRepository) SearchProjectMembers(ctx context.Context, query *ProjectMemberSearchQuery) ([]*model.ProjectMember, int64, error) {
 	if query == nil || query.ProjectID <= 0 {
@@ -72,7 +73,7 @@ func (r *projectMemberRepository) SearchProjectMembers(ctx context.Context, quer
 		db = db.Where("project_members.role = ?", query.Role)
 	}
 
-	// 按用户名 / 昵称模糊匹配
+	// 按用户名前缀匹配
 	if query.Keyword != "" {
 		like := query.Keyword + "%"
 		db = db.Where("(users.username LIKE ?)", like)
@@ -132,26 +133,104 @@ func (r *projectMemberRepository) UpdateProjectMemberRole(ctx context.Context, t
 		Update(model.ProjectMemberColumnRole, role).Error
 }
 
-// RemoveProjectMember 从项目中移除成员
-func (r *projectMemberRepository) RemoveProjectMember(ctx context.Context, tx *gorm.DB, projectID, userID uint64) error {
+// SoftDeleteProjectMember 从项目中移除成员
+func (r *projectMemberRepository) SoftDeleteProjectMember(ctx context.Context, tx *gorm.DB, projectID, userID uint64) error {
 	if projectID <= 0 || userID <= 0 {
 		return ErrProjectMemberQueryInvalid
 	}
 
-	return getDB(ctx, r.db, tx).
+	now := time.Now()
+	result := getDB(ctx, r.db, tx).
 		Model(&model.ProjectMember{}).
 		Where(model.ProjectMemberColumnProjectID+" = ?", projectID).
 		Where(model.ProjectMemberColumnUserID+" = ?", userID).
-		Delete(&model.ProjectMember{}).Error
+		Where(model.ProjectMemberColumnDeletedAt + " IS NULL").
+		Updates(map[string]interface{}{
+			model.ProjectMemberColumnDeletedAt: now,
+			model.ProjectMemberColumnUpdatedAt: now,
+		})
+
+	if result.Error != nil {
+		return result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		return ErrProjectMemberNotFound
+	}
+
+	return nil
+}
+
+// GetProjectMemberByProjectIDAndUserIDUnscoped 查询项目成员，包括软删除数据
+func (r *projectMemberRepository) GetProjectMemberByProjectIDAndUserIDUnscoped(
+	ctx context.Context,
+	projectID uint64,
+	userID uint64,
+) (*model.ProjectMember, error) {
+	var projectMember model.ProjectMember
+
+	err := getDB(ctx, r.db, nil).
+		Unscoped().
+		Where(model.ProjectMemberColumnProjectID+" = ?", projectID).
+		Where(model.ProjectMemberColumnUserID+" = ?", userID).
+		First(&projectMember).Error
+
+	if errors.Is(err, gorm.ErrRecordNotFound) {
+		return nil, ErrProjectMemberNotFound
+	}
+
+	if err != nil {
+		return nil, err
+	}
+
+	return &projectMember, nil
+}
+
+// RestoreProjectMemberWithTxParam 回复软删除成员参数
+type RestoreProjectMemberWithTxParam struct {
+	ProjectID uint64
+	UserID    uint64
+	Role      string
+	InvitedBy *uint64
+	JoinedAt  time.Time
+	UpdatedAt time.Time
+}
+
+// RestoreProjectMemberWithTx 恢复软删除项目成员
+func (r *projectMemberRepository) RestoreProjectMemberWithTx(ctx context.Context, tx *gorm.DB, param *RestoreProjectMemberWithTxParam) error {
+
+	// 先定义当前时间
+	now := time.Now()
+
+	// 使用 Unscoped() 恢复已软删除的项目成员
+	result := getDB(ctx, r.db, tx).
+		Unscoped().
+		Model(&model.ProjectMember{}).
+		Where(model.ProjectMemberColumnProjectID+" = ?", param.ProjectID).
+		Where(model.ProjectMemberColumnUserID+" = ?", param.UserID).
+		Where(model.ProjectMemberColumnDeletedAt + " IS NOT NULL").
+		Updates(map[string]interface{}{
+			model.ProjectMemberColumnRole:      param.Role,
+			model.ProjectMemberColumnInvitedBy: param.InvitedBy,
+			model.ProjectMemberColumnJoinedAt:  param.JoinedAt,
+			model.ProjectMemberColumnUpdatedAt: now,
+			model.ProjectMemberColumnDeletedAt: nil, // 恢复：清空软删除标记
+		})
+
+	if result.Error != nil {
+		return result.Error
+	}
+
+	if result.RowsAffected == 0 {
+		return ErrProjectMemberNotFound
+	}
+
+	return nil
 }
 
 // GetProjectMemberRoleByProjectIDAndUserID 获取指定成员在项目中的角色
 // 上层若只关心角色，可避免加载完整对象
 func (r *projectMemberRepository) GetProjectMemberRoleByProjectIDAndUserID(ctx context.Context, projectID, userID uint64) (string, error) {
-	if projectID <= 0 || userID <= 0 {
-		return "", ErrProjectMemberQueryInvalid
-	}
-
 	var role string
 	err := getDB(ctx, r.db, nil).
 		Model(&model.ProjectMember{}).
@@ -196,9 +275,6 @@ func (r *projectMemberRepository) CountByProjectIDAndRole(ctx context.Context, p
 //
 // 该方法非常适合上层做鉴权：判断当前用户是否属于项目、角色是什么
 func (r *projectMemberRepository) GetProjectMemberByProjectIDAndUserID(ctx context.Context, projectID, userID uint64) (*model.ProjectMember, error) {
-	if projectID <= 0 || userID <= 0 {
-		return nil, ErrProjectMemberQueryInvalid
-	}
 
 	var projectMember model.ProjectMember
 	err := getDB(ctx, r.db, nil).
@@ -219,10 +295,6 @@ func (r *projectMemberRepository) GetProjectMemberByProjectIDAndUserID(ctx conte
 // ExistsByProjectIDAndUserID 判断用户是否为项目成员
 // 上层在做权限前置校验时会经常用到
 func (r *projectMemberRepository) ExistsByProjectIDAndUserID(ctx context.Context, projectID, userID uint64) (bool, error) {
-	if projectID <= 0 || userID <= 0 {
-		return false, ErrProjectMemberQueryInvalid
-	}
-
 	var count int64
 	err := getDB(ctx, r.db, nil).
 		Model(&model.ProjectMember{}).

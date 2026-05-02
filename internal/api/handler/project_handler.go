@@ -213,7 +213,7 @@ func (h *ProjectHandler) GetProjectDetail(c *gin.Context) {
 
 	// 参数解析成功，调用服务
 	userID := contextx.GetUserID(c)
-	projectID := req.ID
+	projectID := req.ProjectID
 
 	// 追加 user_id 和 project_id，避免重复传递
 	logger = logger.With(
@@ -277,7 +277,7 @@ func (h *ProjectHandler) UpdateProject(c *gin.Context) {
 		return
 	}
 	// 解析成功
-	projectID := uri.ID
+	projectID := uri.ProjectID
 
 	if err := c.ShouldBindJSON(&req); err != nil {
 		logger.Warn("bind update project request failed",
@@ -392,7 +392,7 @@ func (h *ProjectHandler) ArchiveProject(c *gin.Context) {
 		return
 	}
 	// 参数解析成功，调用服务
-	projectID := uri.ID
+	projectID := uri.ProjectID
 	userID := contextx.GetUserID(c)
 
 	// 追加 user_id 和 project_id，避免重复传递
