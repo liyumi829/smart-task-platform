@@ -6,7 +6,7 @@ import "time"
 
 // ProjectIDUri 项目 ID 路径参数
 type ProjectIDUri struct {
-	ID uint64 `uri:"id" binding:"required,min=1"` // 项目 ID
+	ProjectID uint64 `uri:"projectId" binding:"required,min=1"` // 项目 ID
 }
 
 // CreateProjectReq 创建项目请求
@@ -67,12 +67,7 @@ type ProjectListItem struct {
 }
 
 // ProjectListResp 项目列表响应
-type ProjectListResp struct {
-	List     []*ProjectListItem `json:"list"`      // 项目列表
-	Total    int                `json:"total"`     // 总数
-	Page     int                `json:"page"`      // 当前页
-	PageSize int                `json:"page_size"` // 每页条数
-}
+type ProjectListResp = PageResp[*ProjectListItem]
 
 // UpdateProjectReq 更新项目请求
 type UpdateProjectReq struct {

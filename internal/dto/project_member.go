@@ -6,8 +6,8 @@ import "time"
 
 // ProjectMemberIDUri 项目 ID 路径参数
 type ProjectMemberIDUri struct {
-	ID     uint64 `uri:"id" binding:"required,min=1"`      // 项目 ID
-	UserID uint64 `uri:"userId" binding:"omitempty,min=1"` // 用户ID
+	ProjectID uint64 `uri:"projectId" binding:"required"` // 项目 ID
+	UserID    uint64 `uri:"userId" binding:"omitempty"`   // 用户ID
 }
 
 // AddProjectMemberReq 添加项目成员请求
@@ -43,12 +43,7 @@ type ProjectMemberListItem struct {
 }
 
 // ProjectMemberListResp 项目成员列表响应
-type ProjectMemberListResp struct {
-	List     []*ProjectMemberListItem `json:"list"`
-	Total    int                      `json:"total"`
-	Page     int                      `json:"page"`
-	PageSize int                      `json:"page_size"`
-}
+type ProjectMemberListResp = PageResp[*ProjectMemberListItem]
 
 // UpdateProjectMemberReq 更新项目成员属性
 type UpdateProjectMemberReq struct {

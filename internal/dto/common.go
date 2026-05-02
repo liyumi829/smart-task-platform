@@ -1,6 +1,11 @@
 // Package dto common 模块的数据传输对象定义
 package dto
 
+const (
+	MinPageSize = 10
+	MaxPageSize = 50
+)
+
 // UserSummary 通用用户摘要信息
 type UserSummary struct {
 	ID       uint64 `json:"id"`               // 用户 ID
@@ -18,33 +23,24 @@ type UserPublicProfile struct {
 	Avatar   string `json:"avatar,omitempty"` // 头像
 }
 
-const (
-	MinPageSize = 10
-	MaxPageSize = 50
-)
+// ProjectPublicProfile 项目公开资料
+type ProjectPublicProfile struct {
+	ID   uint64 `json:"id"`   // 项目ID
+	Name string `json:"name"` // 项目名称
+}
 
 // PageQuery 通用分页查询参数
 type PageQuery struct {
-	Page     int `form:"page" binding:"omitempty,min=1"`              // 页码
-	PageSize int `form:"page_size" binding:"omitempty,min=1,max=100"` // 每页数量
+	Page     int `form:"page" binding:"omitempty"`      // 页码
+	PageSize int `form:"page_size" binding:"omitempty"` // 每页数量
 }
 
-// EmptyResp 空响应占位结构
-type EmptyResp struct{}
-
-// IDUri 通用资源 ID 路径参数
-type IDUri struct {
-	ID uint64 `uri:"id" binding:"required,min=1"` // 资源 ID
-}
-
-// TagIDUri 标签 ID 路径参数
-type TagIDUri struct {
-	TagID uint64 `uri:"tagId" binding:"required,min=1"` // 标签 ID
-}
-
-// TaskIDUri 任务 ID 路径参数
-type TaskIDUri struct {
-	ID uint64 `uri:"id" binding:"required,min=1"` // 任务 ID
+// PageResp 页面泛型通用响应
+type PageResp[T interface{}] struct {
+	List     []T `json:"list"`      // 项目列表
+	Total    int `json:"total"`     // 总数
+	Page     int `json:"page"`      // 当前页
+	PageSize int `json:"page_size"` // 每页条数
 }
 
 // CommentIDUri 评论 ID 路径参数
