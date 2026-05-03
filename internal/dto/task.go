@@ -176,8 +176,8 @@ type UpdateTaskSortOrderResp struct {
 	UpdatedAt time.Time       `json:"updated_at"`
 }
 
-// DeleteTaskReq 删除任务的请求
-type DeleteTaskReq struct{} // 占位
+// RemoveTaskReq 删除任务的请求
+type RemoveTaskReq struct{} // 占位
 
-// DeleteTaskResp 删除任务的响应
-type DeleteTaskResp struct{} // 占位
+// RemoveTaskResp 删除任务的响应
+type RemoveTaskResp struct{} // 占位

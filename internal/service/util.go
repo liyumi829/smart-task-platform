@@ -170,8 +170,28 @@ func buildProjectPublicProfile(project *model.Project) *dto.ProjectPublicProfile
 	}
 }
 
-// roleLevelInvoker 项目成员角色等级查询接口
-type roleLevelInvoker interface {
+// buildTaskCommentBaseFields 构造任务评论基础信息 DTO
+func buildTaskCommentBaseFields(comment *model.TaskComment) *dto.TaskCommentBaseFields {
+	// 空值保护
+	if comment == nil {
+		return nil
+	}
+
+	return &dto.TaskCommentBaseFields{
+		ID:            comment.ID,
+		TaskID:        comment.TaskID,
+		Content:       comment.Content,
+		AuthorID:      comment.AuthorID,
+		Author:        buildUserPublicProfile(comment.Author),
+		ParentID:      comment.ParentID,
+		ReplyToUserID: comment.ReplyToUserID,
+		ReplyToUser:   buildUserPublicProfile(comment.ReplyToUser),
+		CreatedAt:     comment.CreatedAt,
+	}
+}
+
+// ProjectMemberFinder  项目成员角色等级查询接口
+type ProjectMemberFinder interface {
 	GetProjectMemberByProjectIDAndUserID(ctx context.Context, projectID, userID uint64) (*model.ProjectMember, error)
 }
 
@@ -185,7 +205,7 @@ type roleLevelInvoker interface {
 // 数字越小，权限越高。
 func getProjectMemberRoleLevel(
 	ctx context.Context,
-	invoker roleLevelInvoker,
+	invoker ProjectMemberFinder,
 	projectID uint64,
 	userID uint64,
 	logger *zap.Logger,
@@ -223,8 +243,8 @@ func getProjectMemberRoleLevel(
 	return member.Role, level, nil
 }
 
-// projectRoleInvoker 项目成员角色查询接口
-type projectRoleInvoker interface {
+// ProjectRoleChecker  项目成员角色查询接口
+type ProjectRoleChecker interface {
 	GetProjectMemberRoleByProjectIDAndUserID(ctx context.Context, projectID, userID uint64) (string, error)
 }
 
@@ -236,7 +256,7 @@ type projectRoleInvoker interface {
 //   - 不存在都当作是无权限
 func hasProjectManagePermission(
 	ctx context.Context,
-	invoker projectRoleInvoker,
+	invoker ProjectRoleChecker,
 	projectID uint64,
 	userID uint64,
 	logger *zap.Logger,
@@ -277,4 +297,122 @@ func hasProjectManagePermission(
 	)
 
 	return false, nil
+}
+
+// taskGetInvoker 任务获取接口
+type TaskFinder interface {
+	GetTaskByID(ctx context.Context, taskID uint64) (*model.Task, error)
+}
+
+// ProjectMemberChecker  判断是否是项目成员接口
+type ProjectMemberChecker interface {
+	ExistsByProjectIDAndUserID(ctx context.Context, projectID, userID uint64) (bool, error)
+}
+
+// validateTaskCommentAccess 校验任务是否属于项目，并校验用户是否为项目成员
+func validateTaskCommentAccess(
+	ctx context.Context,
+	pmr ProjectMemberChecker,
+	tr TaskFinder,
+	projectID uint64,
+	taskID uint64,
+	userID uint64,
+	logger *zap.Logger,
+) (*model.Task, error) {
+	// 查询任务，拿到任务真实所属项目
+	task, err := tr.GetTaskByID(ctx, taskID)
+	if err != nil {
+		logger.Error("task comment access check failed: get task error",
+			zap.Uint64("project_id", projectID),
+			zap.Uint64("task_id", taskID),
+			zap.Uint64("user_id", userID),
+			zap.Error(err),
+		)
+		return nil, err
+	}
+
+	// 校验路径中的 projectID 是否和任务真实 projectID 一致
+	if task.ProjectID != projectID {
+		logger.Warn("task comment access check failed: task does not belong to project",
+			zap.Uint64("path_project_id", projectID),
+			zap.Uint64("task_project_id", task.ProjectID),
+			zap.Uint64("task_id", taskID),
+			zap.Uint64("user_id", userID),
+		)
+		return nil, ErrTaskNotFound
+	}
+
+	// 判断用户是否是项目成员
+	ok, err := pmr.ExistsByProjectIDAndUserID(ctx, projectID, userID)
+	if err != nil {
+		logger.Error("task comment access check failed: check project member error",
+			zap.Uint64("project_id", projectID),
+			zap.Uint64("task_id", taskID),
+			zap.Uint64("user_id", userID),
+			zap.Error(err),
+		)
+		return nil, err
+	}
+
+	if !ok {
+		logger.Warn("task comment access check failed: project member not found",
+			zap.Uint64("project_id", projectID),
+			zap.Uint64("task_id", taskID),
+			zap.Uint64("user_id", userID),
+		)
+		return nil, ErrTaskForbidden
+	}
+
+	logger.Debug("task comment access check success: permission granted",
+		zap.Uint64("project_id", projectID),
+		zap.Uint64("task_id", taskID),
+		zap.Uint64("user_id", userID),
+	)
+
+	return task, nil
+}
+
+// collectTaskCommentParentIDs 收集评论列表中的父评论 ID
+func collectTaskCommentParentIDs(comments []*model.TaskComment) []uint64 {
+	if len(comments) == 0 {
+		return nil
+	}
+
+	idSet := make(map[uint64]struct{}) // 去重
+	for _, comment := range comments {
+		if comment == nil || comment.ParentID == nil || *comment.ParentID == 0 {
+			continue
+		}
+		idSet[*comment.ParentID] = struct{}{}
+	}
+
+	ids := make([]uint64, 0, len(idSet))
+	for id := range idSet {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func buildTaskCommentItem(
+	comment *model.TaskComment,
+	parentDeletedMap map[uint64]bool,
+) *dto.TaskCommentListItem {
+	if comment == nil {
+		return nil
+	}
+
+	item := &dto.TaskCommentListItem{
+		TaskCommentBaseFields: buildTaskCommentBaseFields(comment),
+	}
+
+	// 判断父评论是否已经被删除
+	if comment.ParentID != nil && *comment.ParentID > 0 {
+		item.ParentDeleted = parentDeletedMap[*comment.ParentID]
+	}
+
+	if comment.ReplyToUser != nil {
+		item.ReplyToUser = buildUserPublicProfile(comment.ReplyToUser)
+	}
+
+	return item
 }

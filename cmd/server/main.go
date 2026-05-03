@@ -61,6 +61,7 @@ func main() {
 	projectRepo := repository.NewProjectRepository(db)             // 项目表仓储
 	projectMemberRepo := repository.NewProjectMemberRepository(db) // 项目成员表仓储
 	taskRepo := repository.NewTaskRepository(db)                   // 任务表仓储
+	taskCommentRepo := repository.NewTaskCommentRepository(db)     // 任务评论表仓储
 
 	// 初始化服务
 	authService := service.NewAuthService(txManager, userRepo, authStore, jwtManager)                                      // 鉴权服务
@@ -68,6 +69,7 @@ func main() {
 	projectService := service.NewProjectService(txManager, userRepo, projectRepo, projectMemberRepo)                       // 项目服务
 	projectMemberService := service.NewProjectMemberService(txManager, userRepo, projectRepo, projectMemberRepo, taskRepo) // 项目成员服务
 	taskService := service.NewTaskService(txManager, userRepo, projectRepo, projectMemberRepo, taskRepo)                   // 任务服务
+	taskCommentService := service.NewTaskCommentService(txManager, userRepo, projectMemberRepo, taskRepo, taskCommentRepo) // 任务评论服务
 
 	// 初始化 Handler
 	authHandler := handler.NewAuthHandler(authService)                            // 鉴权 Handler
@@ -75,6 +77,7 @@ func main() {
 	projectHandler := handler.NewProjectHandler(projectService)                   // 项目 Handler
 	projectMemberHandler := handler.NewProjectMemberHandler(projectMemberService) // 项目成员 Handler
 	taskHandler := handler.NewTaskHandler(taskService)                            // 任务 Handler
+	taskCommentHandler := handler.NewTaskCommentHandler(taskCommentService)       // 任务评论 Handler
 	// 初始化 Gin
 	r := gin.New()
 	r.Use(gin.Logger(), gin.Recovery())
@@ -90,7 +93,14 @@ func main() {
 	}
 
 	// 注册路由
-	router.Register(r, jwtManager, authStore, authHandler, userHandler, projectHandler, projectMemberHandler, taskHandler)
+	router.Register(r, jwtManager, authStore,
+		authHandler,
+		userHandler,
+		projectHandler,
+		projectMemberHandler,
+		taskHandler,
+		taskCommentHandler,
+	)
 
 	// 启动服务
 	addr := net.JoinHostPort(*host, *port)

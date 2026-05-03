@@ -1294,7 +1294,7 @@ type RemoveTaskParam struct {
 }
 
 // RemoveTask 软删除任务
-func (s *TaskService) RemoveTask(ctx context.Context, param *RemoveTaskParam) (*dto.DeleteTaskResp, error) {
+func (s *TaskService) RemoveTask(ctx context.Context, param *RemoveTaskParam) (*dto.RemoveTaskResp, error) {
 	logger := zap.L()
 
 	// 参数校验
@@ -1373,7 +1373,7 @@ func (s *TaskService) RemoveTask(ctx context.Context, param *RemoveTaskParam) (*
 
 	logger.Info("delete task success")
 
-	return &dto.DeleteTaskResp{}, nil
+	return &dto.RemoveTaskResp{}, nil
 }
 
 // taskSvcUserRepo 用户仓储接口

@@ -43,11 +43,6 @@ type PageResp[T interface{}] struct {
 	PageSize int `json:"page_size"` // 每页条数
 }
 
-// CommentIDUri 评论 ID 路径参数
-type CommentIDUri struct {
-	ID uint64 `uri:"id" binding:"required,min=1"` // 评论 ID
-}
-
 // NotificationIDUri 通知 ID 路径参数
 type NotificationIDUri struct {
 	ID uint64 `uri:"id" binding:"required,min=1"` // 通知 ID

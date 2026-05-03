@@ -8,7 +8,7 @@ package errmsg
 // 20000+ : 认证/用户模块
 // 30000+ : 项目模块
 // 40000+ : 任务模块
-// 50000+ : 评论/通知/协作模块
+// 50000+ : 评论/通知模块
 // 60000+ : AI 模块
 
 const (
@@ -86,6 +86,17 @@ const (
 	InvalidTaskSortOrderFormat   = 40012 // 任务排序顺序格式不正确
 	InvalidTaskSortItem          = 40013 // 任务排序表项不合法
 	EmptyTaskSortItem            = 40014 // 任务排序表项为空
+
+	// =========================
+	// 任务评论/通知模块 50000+
+	// =========================
+
+	TaskCommentNotFound       = 50001 // 任务评论不存在
+	ParentCommentNotFound     = 50002 // 父评论不存在
+	EmptyTaskCommentContent   = 50003 // 任务评论内容不能为空
+	InvalidTaskCommentContent = 50004 // 任务评论内容格式不正确
+	InvalidParentComment      = 50005 // 无效的父评论
+	TaskCommentNoPermission   = 50006 // 无评论操作权限
 )
 
 // codeMsgMap 错误码与错误信息映射
@@ -174,6 +185,16 @@ var codeMsgMap = map[int]string{
 	InvalidTaskSortOrderFormat:   "Invalid task sort order format",
 	InvalidTaskSortItem:          "Invalid task sort item",
 	EmptyTaskSortItem:            "Task sort item cannot be empty",
+
+	// =========================
+	// 任务评论错误信息
+	// =========================
+	TaskCommentNotFound:       "Task comment not found",
+	ParentCommentNotFound:     "Parent comment not found",
+	EmptyTaskCommentContent:   "Task comment content cannot be empty",
+	InvalidTaskCommentContent: "Invalid task comment content format",
+	InvalidParentComment:      "Invalid parent comment",
+	TaskCommentNoPermission:   "No permission to operate this task comment",
 }
 
 // GetMsg 根据错误码获取错误信息

@@ -7,23 +7,22 @@ var (
 	ErrOperationTooFrequent = errors.New("operation is too frequent, please try again later") // 重试多次出现错误
 	ErrInternal             = errors.New("internal server error")                             // 内部服务器错误消息
 
-	ErrUserNotFound           = errors.New("user not found")            // 用户未找到错误消息
-	ErrUsernameExists         = errors.New("username already exists")   // 用户名已存在错误消息
-	ErrSessionNotExists       = errors.New("session not exists")        // 会话不存在（用户退出登录）
-	ErrEmailExists            = errors.New("email already exists")      // 邮箱已存在错误消息
-	ErrInvalidUsernameFormat  = errors.New("invalid username format")   // 无效的用户名错误消息
-	ErrInvalidEmailFormat     = errors.New("invalid email format")      // 无效的邮箱错误消息
-	ErrInvalidPasswordFormat  = errors.New("invalid password format")   // 无效的密码错误消息
-	ErrInvalidNicknameFormat  = errors.New("invalid nickname format")   // 无效的昵称错误消息
-	ErrInvalidAccountFormat   = errors.New("invalid account format")    // 无效的账户错误消息
-	ErrInvalidAvatarURLFormat = errors.New("invalid avatar url format") // 无效的头像url错误消息
-	ErrUserDisabled           = errors.New("user is disabled")          // 用户被禁用错误消息
-	ErrPasswordMismatch       = errors.New("password does not match")   // 密码不匹配错误消息
-	ErrInvalidToken           = errors.New("invalid token")             // 无效的 Token 错误消息
-	ErrExpiredToken           = errors.New("refresh token expired")     // 刷新令牌过期错误消息
-
-	ErrOldPasswordMismatch  = errors.New("old password is incorrect")                       // 输入的旧密码不正确
-	ErrNewPasswordSameAsOld = errors.New("new password cannot be the same as old password") // 新密码和旧密码相同
+	ErrUserNotFound           = errors.New("user not found")                                  // 用户未找到错误消息
+	ErrUsernameExists         = errors.New("username already exists")                         // 用户名已存在错误消息
+	ErrSessionNotExists       = errors.New("session not exists")                              // 会话不存在（用户退出登录）
+	ErrEmailExists            = errors.New("email already exists")                            // 邮箱已存在错误消息
+	ErrInvalidUsernameFormat  = errors.New("invalid username format")                         // 无效的用户名错误消息
+	ErrInvalidEmailFormat     = errors.New("invalid email format")                            // 无效的邮箱错误消息
+	ErrInvalidPasswordFormat  = errors.New("invalid password format")                         // 无效的密码错误消息
+	ErrInvalidNicknameFormat  = errors.New("invalid nickname format")                         // 无效的昵称错误消息
+	ErrInvalidAccountFormat   = errors.New("invalid account format")                          // 无效的账户错误消息
+	ErrInvalidAvatarURLFormat = errors.New("invalid avatar url format")                       // 无效的头像url错误消息
+	ErrUserDisabled           = errors.New("user is disabled")                                // 用户被禁用错误消息
+	ErrPasswordMismatch       = errors.New("password does not match")                         // 密码不匹配错误消息
+	ErrInvalidToken           = errors.New("invalid token")                                   // 无效的 Token 错误消息
+	ErrExpiredToken           = errors.New("refresh token expired")                           // 刷新令牌过期错误消息
+	ErrOldPasswordMismatch    = errors.New("old password is incorrect")                       // 输入的旧密码不正确
+	ErrNewPasswordSameAsOld   = errors.New("new password cannot be the same as old password") // 新密码和旧密码相同
 
 	ErrProjectNotFound           = errors.New("project not found")                // 项目不存在
 	ErrProjectForbidden          = errors.New("no permission to operate project") // 无项目操作权限
@@ -43,10 +42,10 @@ var (
 	ErrExceedsAdminMemberLimit    = errors.New("admin member limit exceeded")         // 管理员人数已达上限
 
 	ErrTaskNotFound             = errors.New("task not found")                  // 任务没有找到
-	ErrInvalidTaskParam         = errors.New("invalid task parameter")          // 非法的任务参数
+	ErrInvalidTaskParam         = errors.New("invalid task parameter")          // 不符合的任务参数
 	ErrEmptyTaskTitle           = errors.New("task title cannot be empty")      // 任务标题为空
 	ErrInvalidTaskTitle         = errors.New("invalid task title")              // 不合法的标题名称
-	ErrInvalidTaskDescription   = errors.New("invalid task description")        // 非法的任务描述
+	ErrInvalidTaskDescription   = errors.New("invalid task description")        // 不合法的任务描述
 	ErrInvalidTaskPriority      = errors.New("invalid task priority")           // 不合法的优先级
 	ErrInvalidTaskTime          = errors.New("invalid task time")               // 不合法的时间
 	ErrInvalidTaskStatus        = errors.New("invalid task status")             // 不合法的任务状态
@@ -58,4 +57,12 @@ var (
 	ErrInvalidTaskSortOrderItem = errors.New("invalid task sort order item")    // 错误的任务排序表项
 	ErrEmptyTaskSortItems       = errors.New("task sort items cannot be empty") // 排序表项为空
 	ErrTaskSortNoRowsUpdated    = errors.New("task sort no rows updated")       // 批量更新数据没有受到影响
+
+	ErrTaskCommentNotFound       = errors.New("task comment not found")               // 评论不存在
+	ErrInvalidTaskCommentParam   = errors.New("invalid task comment parameter")       // 不合法的任务评论参数
+	ErrEmptyTaskCommentContent   = errors.New("task comment content cannot be empty") // 评论内容为空
+	ErrInvalidTaskCommentContent = errors.New("invalid task comment content")         // 不合法的任务评论内容
+	ErrParentCommentNotFound     = errors.New("parent comment not found")             // 父评论不存在
+	ErrInvalidParentComment      = errors.New("invalid parent comment")               // 不合法的父评论
+	ErrTaskCommentForbidden      = errors.New("task comment forbidden")               // 无评论操作权限
 )
