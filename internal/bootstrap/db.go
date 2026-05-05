@@ -3,6 +3,8 @@
 package bootstrap
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -66,16 +68,22 @@ func InitDB(mode string, c *MySQLConfig) *gorm.DB {
 	} else {
 		// 自定义 GORM 日志（输出到 stdout，生产环境用）
 		newLogger := logger.New(
-			log.New(os.Stdout, "\r\n", log.LstdFlags), // 输出到标准输出
+			log.New(os.Stdout, "", log.LstdFlags),
 			logger.Config{
-				SlowThreshold:             200 * time.Millisecond, // 慢查询阈值
-				LogLevel:                  logger.Warn,            // 只打印 Warn/Error
-				IgnoreRecordNotFoundError: true,                   // 忽略记录不存在错误
-				Colorful:                  false,                  // 生产环境关闭颜色
+				SlowThreshold:             100 * time.Millisecond,
+				LogLevel:                  logger.Warn,
+				IgnoreRecordNotFoundError: true,
+				Colorful:                  false,
 			},
 		)
+
+		// 这里包装一下，过滤 context canceled
+		newLogger = IgnoreCanceledLogger{
+			Interface: newLogger,
+		}
+
 		cfg = &gorm.Config{
-			Logger: newLogger, // 使用自定义日志器
+			Logger: newLogger,
 		}
 	}
 
@@ -97,6 +105,13 @@ func InitDB(mode string, c *MySQLConfig) *gorm.DB {
 	sqlDB.SetMaxIdleConns(c.MaxIdleConns)                                    // 最大空闲连接数
 	sqlDB.SetConnMaxLifetime(time.Duration(c.ConnMaxLifetime) * time.Second) // 连接最大生命周期（避免长连接失效）
 	sqlDB.SetConnMaxIdleTime(time.Duration(c.ConnMaxIdleTime) * time.Second) // 连接最大空闲时间
+	// 启动时打印确认配置是否生效
+	log.Printf("mysql connection pool configured, max_open_conns:%d, max_idle_conns:%d, conn_max_lifetime_seconds:%d, conn_max_idle_time_seconds:%d",
+		c.MaxOpenConns,
+		c.MaxIdleConns,
+		c.ConnMaxLifetime,
+		c.ConnMaxIdleTime)
+
 	zap.L().Info("database connected successfully",
 		zap.String("dns", dsn),
 	)
@@ -126,17 +141,29 @@ func (c *MySQLConfig) setDefault() {
 	if c.Loc == "" {
 		c.Loc = "Local"
 	}
+	// 4 核 4G 单机部署时，不建议默认开到 100，避免 MySQL 并发查询过多导致 Threads_running 波动过大
 	if c.MaxOpenConns <= 0 {
-		c.MaxOpenConns = 100
+		c.MaxOpenConns = 32
 	}
+
+	// 空闲连接不应过多，建议为 MaxOpenConns 的 1/4 ~ 1/2
 	if c.MaxIdleConns <= 0 {
-		c.MaxIdleConns = 20
+		c.MaxIdleConns = 16
 	}
+
+	// MaxIdleConns 不能大于 MaxOpenConns
+	if c.MaxIdleConns > c.MaxOpenConns {
+		c.MaxIdleConns = c.MaxOpenConns
+	}
+
+	// 连接最大生命周期不要太短，避免压测期间频繁重建连接
 	if c.ConnMaxLifetime <= 0 {
-		c.ConnMaxLifetime = 30
+		c.ConnMaxLifetime = 300
 	}
+
+	// 空闲连接保留时间适中，减少连接频繁创建和销毁
 	if c.ConnMaxIdleTime <= 0 {
-		c.ConnMaxIdleTime = 10
+		c.ConnMaxIdleTime = 60
 	}
 }
 
@@ -153,4 +180,32 @@ func (c *MySQLConfig) mySQLDSN() string {
 		c.ParseTime,
 		c.Loc,
 	)
+}
+
+// IgnoreCanceledLogger 包装 GORM Logger，用于忽略 context canceled 日志
+type IgnoreCanceledLogger struct {
+	logger.Interface
+}
+
+// LogMode 设置日志级别
+func (l IgnoreCanceledLogger) LogMode(level logger.LogLevel) logger.Interface {
+	return IgnoreCanceledLogger{
+		Interface: l.Interface.LogMode(level),
+	}
+}
+
+// Trace 拦截 GORM SQL 日志
+func (l IgnoreCanceledLogger) Trace(
+	ctx context.Context,
+	begin time.Time,
+	fc func() (sql string, rowsAffected int64),
+	err error,
+) {
+	// 压测时客户端主动断开会产生 context canceled，不作为服务端错误打印
+	if errors.Is(err, context.Canceled) {
+		return
+	}
+
+	// context deadline exceeded 可以保留，因为它通常代表服务端超时或 SQL 太慢
+	l.Interface.Trace(ctx, begin, fc, err)
 }

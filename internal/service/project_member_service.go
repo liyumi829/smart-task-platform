@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"smart-task-platform/internal/dto"
 	"smart-task-platform/internal/model"
+	"smart-task-platform/internal/pkg/utils"
 	"smart-task-platform/internal/repository"
 	"strings"
 	"time"
@@ -267,6 +268,7 @@ type ListProjectMembersParam struct {
 	ProjectID uint64
 	Page      int
 	PageSize  int
+	NeedTotal bool
 	Role      string
 	Keyword   string
 }
@@ -329,9 +331,12 @@ func (s *ProjectMemberService) ListProjectMembers(ctx context.Context, param *Li
 
 	// 参数校验完成，进行搜索
 	// 需要内置搜索完成 preload User
-	projectMembers, total, err := s.pmr.SearchProjectMembers(ctx, &repository.ProjectMemberSearchQuery{
-		Page:      page,
-		PageSize:  pageSize,
+	result, err := s.pmr.SearchProjectMembers(ctx, &repository.ProjectMemberSearchQuery{
+		SearchQuery: repository.SearchQuery{
+			Page:      page,
+			PageSize:  pageSize,
+			NeedTotal: param.NeedTotal,
+		},
 		ProjectID: param.ProjectID,
 		Role:      role,
 		Keyword:   keyword,
@@ -341,8 +346,8 @@ func (s *ProjectMemberService) ListProjectMembers(ctx context.Context, param *Li
 		return nil, err
 	}
 	// 搜索成功 构造list
-	list := make([]*dto.ProjectMemberListItem, 0, len(projectMembers))
-	for _, projectMember := range projectMembers {
+	list := make([]*dto.ProjectMemberListItem, 0, len(result.List))
+	for _, projectMember := range result.List {
 		if projectMember == nil {
 			// 正常情况下 repository 不应该返回 nil，这里做防御性处理
 			logger.Warn("list project members skipped: nil project member")
@@ -362,7 +367,7 @@ func (s *ProjectMemberService) ListProjectMembers(ctx context.Context, param *Li
 	}
 	// 构造成功返回响应
 	logger.Info("list project members success",
-		zap.Int64("total", total),
+		zap.Bool("has_more", result.HasMore),
 		zap.Int("list_size", len(list)),
 	)
 
@@ -370,7 +375,8 @@ func (s *ProjectMemberService) ListProjectMembers(ctx context.Context, param *Li
 		List:     list,
 		Page:     page,
 		PageSize: pageSize,
-		Total:    int(total),
+		Total:    utils.SafePtrClone(result.Total),
+		HasMore:  result.HasMore,
 	}, nil
 }
 
@@ -701,7 +707,7 @@ type projectMemberSvcProjectRepo interface {
 // projectMemberSvcProjectMemberRepo 项目成员仓储接口
 type projectMemberSvcProjectMemberRepo interface {
 	CreateWithTx(ctx context.Context, tx *gorm.DB, projectMember *model.ProjectMember) error
-	SearchProjectMembers(ctx context.Context, query *repository.ProjectMemberSearchQuery) ([]*model.ProjectMember, int64, error)
+	SearchProjectMembers(ctx context.Context, query *repository.ProjectMemberSearchQuery) (*repository.SearchProjectMemberResult, error)
 	UpdateProjectMemberRole(ctx context.Context, tx *gorm.DB, projectID, userID uint64, role string) error
 	SoftDeleteProjectMember(ctx context.Context, tx *gorm.DB, projectID, userID uint64) error
 

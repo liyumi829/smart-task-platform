@@ -8,6 +8,7 @@ import (
 	"smart-task-platform/internal/dto"
 	"smart-task-platform/internal/model"
 	"smart-task-platform/internal/pkg/password"
+	"smart-task-platform/internal/pkg/utils"
 	"smart-task-platform/internal/pkg/validator"
 	"smart-task-platform/internal/repository"
 	"strings"
@@ -255,13 +256,21 @@ func (s *UserService) GetUserPublicInfo(ctx context.Context, targetUserID uint64
 	}, nil
 }
 
-// ListUsers 用户搜索列表（分页）
-func (s *UserService) ListUsers(ctx context.Context, page, pageSize int, key string) (*dto.UserSearchListResp, error) {
-	// 参数检查。
-	keyword := strings.TrimSpace(key) // 清理关键字空格
-	if keyword == "" {
-		page, pageSize = fixPageParams(page, pageSize)
+// ListUserParam 用户搜索参数
+type ListUserParam struct {
+	Page      int
+	PageSize  int
+	KeyWord   string
+	NeedTotal bool
+}
 
+// ListUsers 用户搜索列表（分页）
+func (s *UserService) ListUsers(ctx context.Context, param *ListUserParam) (*dto.UserSearchListResp, error) {
+	// 参数检查。
+	keyword := strings.TrimSpace(param.KeyWord) // 清理关键字空格
+	var page, pageSize int
+	if keyword == "" {
+		page, pageSize = fixPageParams(param.Page, param.PageSize)
 		zap.L().Info("skip search user list because keyword is empty",
 			zap.Int("page", page),
 			zap.Int("page_size", pageSize),
@@ -269,19 +278,22 @@ func (s *UserService) ListUsers(ctx context.Context, page, pageSize int, key str
 
 		return &dto.UserSearchListResp{
 			List:     []*dto.UserListItem{},
-			Total:    0,
+			Total:    utils.Int64Ptr(0),
 			Page:     page,
 			PageSize: pageSize,
 		}, nil // 不做查询，防止全量查询
 	}
-	page, pageSize = fixPageParams(page, pageSize) // 分页参数兜底。
+	page, pageSize = fixPageParams(param.Page, param.PageSize) // 分页参数兜底。
 
 	// 参数校验完成
-	// 开始搜索用户：
-	users, total, err := s.ur.SearchUsers(ctx, &repository.UserSearchQuery{
-		Keyword:  keyword,
-		Page:     page,
-		PageSize: pageSize,
+	// 开始搜索用户
+	result, err := s.ur.SearchUsers(ctx, &repository.UserSearchQuery{
+		Keyword: keyword,
+		SearchQuery: repository.SearchQuery{
+			Page:      page,
+			PageSize:  pageSize,
+			NeedTotal: param.NeedTotal,
+		},
 	})
 	// 差错处理
 	if err != nil {
@@ -295,8 +307,11 @@ func (s *UserService) ListUsers(ctx context.Context, page, pageSize int, key str
 		return nil, err
 	}
 
-	userItems := make([]*dto.UserListItem, 0, len(users))
-	for _, user := range users {
+	userItems := make([]*dto.UserListItem, 0, len(result.List))
+	for _, user := range result.List {
+		if user == nil {
+			continue
+		}
 		userItems = append(userItems,
 			&dto.UserListItem{
 				ID:       user.ID,
@@ -310,14 +325,15 @@ func (s *UserService) ListUsers(ctx context.Context, page, pageSize int, key str
 		zap.String("keyword", keyword),
 		zap.Int("page", page),
 		zap.Int("page_size", len(userItems)),
-		zap.Int64("total", total),
+		zap.Bool("has_more", result.HasMore),
 	)
 
 	return &dto.UserSearchListResp{
 		List:     userItems,
-		Total:    int(total),
+		Total:    utils.SafePtrClone(result.Total),
 		Page:     page,
 		PageSize: pageSize,
+		HasMore:  result.HasMore,
 	}, nil
 }
 
@@ -326,5 +342,5 @@ type userSvcUserRepo interface {
 	GetByID(ctx context.Context, id uint64) (*model.User, error)                                                   // 获取用户
 	UpdateUserProfileWithTx(ctx context.Context, tx *gorm.DB, userID uint64, nickname string, avatar string) error // 更新个人资料
 	UpdateUserPasswordWithTx(ctx context.Context, tx *gorm.DB, userID uint64, password string) error               // 更新密码
-	SearchUsers(ctx context.Context, query *repository.UserSearchQuery) ([]*model.User, int64, error)
+	SearchUsers(ctx context.Context, query *repository.UserSearchQuery) (*repository.SearchUserResult, error)
 }

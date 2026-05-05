@@ -31,16 +31,18 @@ type ProjectPublicProfile struct {
 
 // PageQuery 通用分页查询参数
 type PageQuery struct {
-	Page     int `form:"page" binding:"omitempty"`      // 页码
-	PageSize int `form:"page_size" binding:"omitempty"` // 每页数量
+	Page      int  `form:"page" binding:"omitempty"`       // 页码
+	PageSize  int  `form:"page_size" binding:"omitempty"`  // 每页数量
+	NeedTotal bool `form:"need_total" binding:"omitempty"` // 是否查总数
 }
 
 // PageResp 页面泛型通用响应
 type PageResp[T interface{}] struct {
-	List     []T `json:"list"`      // 项目列表
-	Total    int `json:"total"`     // 总数
-	Page     int `json:"page"`      // 当前页
-	PageSize int `json:"page_size"` // 每页条数
+	List     []T    `json:"list"`      // 项目列表
+	Total    *int64 `json:"total"`     // 总数
+	Page     int    `json:"page"`      // 当前页
+	PageSize int    `json:"page_size"` // 每页条数
+	HasMore  bool   `json:"has_more"`  // 判断是否还有页码
 }
 
 // NotificationIDUri 通知 ID 路径参数

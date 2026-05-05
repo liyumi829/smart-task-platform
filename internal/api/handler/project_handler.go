@@ -4,6 +4,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 
 	"smart-task-platform/internal/api/contextx"
@@ -109,6 +110,20 @@ func (h *ProjectHandler) CreateProject(c *gin.Context) {
 			logger.Warn("create project failed: user not found")
 			response.Fail(c, errmsg.UserNotFound)
 
+		// 客户端主动断开或请求被取消，压测时常见，不作为服务端错误
+		case errors.Is(err, context.Canceled):
+			logger.Warn("create project canceled",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.ClientNotFound)
+
+		// 请求超时，需要重点关注
+		case errors.Is(err, context.DeadlineExceeded):
+			logger.Error("create project deadline exceeded",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.TooManyRequest)
+
 		default:
 			logger.Error("create project failed",
 				zap.Error(err),
@@ -127,7 +142,7 @@ func (h *ProjectHandler) CreateProject(c *gin.Context) {
 
 // ListProjects 获取项目列表
 func (h *ProjectHandler) ListProjects(c *gin.Context) {
-	var req dto.ProjectListQuery
+	var query dto.ProjectListQuery
 
 	// 构造基础请求日志
 	logger := zap.L().With(
@@ -135,7 +150,7 @@ func (h *ProjectHandler) ListProjects(c *gin.Context) {
 		zap.String("path", c.FullPath()),
 	)
 
-	if err := c.ShouldBindQuery(&req); err != nil {
+	if err := c.ShouldBindQuery(&query); err != nil {
 		logger.Warn("bind list projects request failed",
 			zap.Error(err),
 		)
@@ -149,18 +164,19 @@ func (h *ProjectHandler) ListProjects(c *gin.Context) {
 	// 追加 user_id，避免重复传递
 	logger = logger.With(
 		zap.Uint64("user_id", userID),
-		zap.Int("page", req.Page),
-		zap.Int("page_size", req.PageSize),
-		zap.String("status", req.Status),
-		zap.String("keyword", req.Keyword),
+		zap.Int("page", query.Page),
+		zap.Int("page_size", query.PageSize),
+		zap.String("status", query.Status),
+		zap.String("keyword", query.Keyword),
 	)
 
 	resp, err := h.projectService.ListProjects(c.Request.Context(), &service.ListProjectsParam{
-		UserID:   userID,
-		Page:     req.Page,
-		PageSize: req.PageSize,
-		Status:   req.Status,
-		Keyword:  req.Keyword,
+		UserID:    userID,
+		Page:      query.Page,
+		PageSize:  query.PageSize,
+		NeedTotal: query.NeedTotal,
+		Status:    query.Status,
+		Keyword:   query.Keyword,
 	})
 	if err != nil {
 		switch {
@@ -172,9 +188,23 @@ func (h *ProjectHandler) ListProjects(c *gin.Context) {
 		// 非法的项目状态
 		case errors.Is(err, service.ErrInvalidProjectStatus):
 			logger.Warn("list projects rejected: invalid project status",
-				zap.String("status", req.Status),
+				zap.String("status", query.Status),
 			)
 			response.Fail(c, errmsg.InvalidProjectStatus)
+
+		// 客户端主动断开或请求被取消，压测时常见，不作为服务端错误
+		case errors.Is(err, context.Canceled):
+			logger.Warn("list projects rejected canceled",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.ClientNotFound)
+
+		// 请求超时，需要重点关注
+		case errors.Is(err, context.DeadlineExceeded):
+			logger.Error("list projects rejected deadline exceeded",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.TooManyRequest)
 
 		default:
 			logger.Error("list projects failed",
@@ -189,7 +219,7 @@ func (h *ProjectHandler) ListProjects(c *gin.Context) {
 	logger.Info("list projects success",
 		zap.Int("page", resp.Page),
 		zap.Int("page_size", resp.PageSize),
-		zap.Int("total", resp.Total),
+		zap.Bool("has_more", resp.HasMore),
 		zap.Int("result_count", len(resp.List)),
 	)
 	response.SuccessWithData(c, resp)
@@ -244,6 +274,20 @@ func (h *ProjectHandler) GetProjectDetail(c *gin.Context) {
 		case errors.Is(err, service.ErrProjectForbidden):
 			logger.Warn("get project detail rejected: project forbidden")
 			response.Fail(c, errmsg.ProjectNoPermission)
+
+		// 客户端主动断开或请求被取消，压测时常见，不作为服务端错误
+		case errors.Is(err, context.Canceled):
+			logger.Warn("get project detail canceled",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.ClientNotFound)
+
+		// 请求超时，需要重点关注
+		case errors.Is(err, context.DeadlineExceeded):
+			logger.Error("get project detail deadline exceeded",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.TooManyRequest)
 
 		default:
 			logger.Error("get project detail failed",
@@ -362,6 +406,20 @@ func (h *ProjectHandler) UpdateProject(c *gin.Context) {
 			logger.Warn("update project rejected: project forbidden")
 			response.Fail(c, errmsg.ProjectNoPermission)
 
+		// 客户端主动断开或请求被取消，压测时常见，不作为服务端错误
+		case errors.Is(err, context.Canceled):
+			logger.Warn("update project  canceled",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.ClientNotFound)
+
+		// 请求超时，需要重点关注
+		case errors.Is(err, context.DeadlineExceeded):
+			logger.Error("update project  deadline exceeded",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.TooManyRequest)
+
 		default:
 			logger.Error("update project failed",
 				zap.Error(err),
@@ -421,6 +479,20 @@ func (h *ProjectHandler) ArchiveProject(c *gin.Context) {
 		case errors.Is(err, service.ErrProjectForbidden):
 			logger.Warn("archive project rejected: project forbidden")
 			response.Fail(c, errmsg.ProjectNoPermission)
+
+		// 客户端主动断开或请求被取消，压测时常见，不作为服务端错误
+		case errors.Is(err, context.Canceled):
+			logger.Warn("archive project canceled",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.ClientNotFound)
+
+		// 请求超时，需要重点关注
+		case errors.Is(err, context.DeadlineExceeded):
+			logger.Error("archive project deadline exceeded",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.TooManyRequest)
 
 		default:
 			logger.Error("archive project failed",

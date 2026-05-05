@@ -125,7 +125,7 @@ func (s *TaskService) CreateTask(ctx context.Context, param *CreateTaskParam) (*
 		return nil, ErrProjectNotFound
 	}
 
-	// 检查创建者是否存在
+	// 检查创建者是否存在+拿到创建者信息
 	creator, err := s.ur.GetByID(ctx, param.CreatorID)
 	if err != nil {
 		if errors.Is(err, repository.ErrUserNotFound) {
@@ -159,7 +159,7 @@ func (s *TaskService) CreateTask(ctx context.Context, param *CreateTaskParam) (*
 			logger.Error("create task failed: get assignee error", zap.Error(err))
 			return nil, err
 		}
-		// 检查负责人是否是项目成员（普通成员也可以创建任务）
+		// 检查负责人是否是项目成员
 		isMember, err = s.pmr.ExistsByProjectIDAndUserID(ctx, param.ProjectID, param.AssigneeID)
 		if err != nil {
 			logger.Error("create task failed: check assignee project member error", zap.Error(err))
@@ -218,8 +218,8 @@ type ListProjectTasksParam struct {
 	AssigneeID                                   *uint64 // 负责人：nil表示全量、0表示找NULL
 	Page                                         int     // 页码
 	PageSize                                     int     // 条数
-	Status, Priority, Keyword, SortBy, SortOrder string
-	// 状态、优先级、关键词、排序规则、排序顺序
+	NeedTotal                                    bool    // 是否查询总数
+	Status, Priority, Keyword, SortBy, SortOrder string  // 状态、优先级、关键词、排序规则、排序顺序
 }
 
 // ListProjectTasks 获取项目下的任务列表
@@ -347,7 +347,7 @@ func (s *TaskService) ListProjectTasks(ctx context.Context, param *ListProjectTa
 	}
 
 	// 查询
-	tasks, total, err := s.tr.SearchTasks(ctx, &repository.TaskSearchQuery{
+	result, err := s.tr.SearchTasks(ctx, &repository.TaskSearchQuery{
 		Page:       page,
 		PageSize:   pageSize,
 		ProjectID:  param.ProjectID,
@@ -357,6 +357,7 @@ func (s *TaskService) ListProjectTasks(ctx context.Context, param *ListProjectTa
 		Priority:   param.Priority,
 		SortBy:     param.SortBy,
 		SortOrder:  param.SortOrder,
+		NeedTotal:  param.NeedTotal,
 	})
 	if err != nil {
 		logger.Error("list project tasks failed: search tasks error", zap.Error(err))
@@ -364,8 +365,8 @@ func (s *TaskService) ListProjectTasks(ctx context.Context, param *ListProjectTa
 	}
 
 	// 搜索成功 构造list
-	list := make([]*dto.ProjectTaskListItem, 0, len(tasks))
-	for _, task := range tasks {
+	list := make([]*dto.ProjectTaskListItem, 0, len(result.List))
+	for _, task := range result.List {
 		if task == nil { // 防御
 			continue
 		}
@@ -378,16 +379,17 @@ func (s *TaskService) ListProjectTasks(ctx context.Context, param *ListProjectTa
 	}
 
 	logger.Info("list project tasks success",
-		zap.Int64("total", total),
+		zap.Bool("has_more", result.HasMore),
 		zap.Int("list_size", len(list)),
 	)
 
 	// 成功 构造响应
 	return &dto.ProjectTaskListResp{
 		List:     list,
-		Total:    int(total),
+		Total:    utils.SafePtrClone(result.Total),
 		Page:     page,
 		PageSize: pageSize,
+		HasMore:  result.HasMore,
 	}, nil
 }
 
@@ -397,8 +399,8 @@ type ListUserTasksParam struct {
 	Page                                         int    // 页码
 	PageSize                                     int    // 条数
 	ProjectID                                    uint64 // 项目作为筛选条件 0 表示全量查询
-	Status, Priority, Keyword, SortBy, SortOrder string
-	// 状态、优先级、关键词、排序规则、排序顺序
+	NeedTotal                                    bool   // 是否需要总数
+	Status, Priority, Keyword, SortBy, SortOrder string // 状态、优先级、关键词、排序规则、排序顺序
 }
 
 // ListUserTasks 获取某个用户的任务列表
@@ -493,8 +495,8 @@ func (s *TaskService) ListUserTasks(ctx context.Context, param *ListUserTasksPar
 		}
 	}
 
-	assigneeID := param.UserID                                              // 避免直接把结构体字段地址传入 repository
-	tasks, total, err := s.tr.SearchTasks(ctx, &repository.TaskSearchQuery{ // 进行批量查询
+	assigneeID := param.UserID                                        // 避免直接把结构体字段地址传入 repository
+	result, err := s.tr.SearchTasks(ctx, &repository.TaskSearchQuery{ // 进行批量查询
 		Page:       page,
 		PageSize:   pageSize,
 		ProjectID:  param.ProjectID,
@@ -504,6 +506,7 @@ func (s *TaskService) ListUserTasks(ctx context.Context, param *ListUserTasksPar
 		Priority:   param.Priority,
 		SortBy:     param.SortBy,
 		SortOrder:  param.SortOrder,
+		NeedTotal:  param.NeedTotal,
 	})
 	if err != nil {
 		logger.Error("list user tasks failed: search tasks error", zap.Error(err))
@@ -511,8 +514,8 @@ func (s *TaskService) ListUserTasks(ctx context.Context, param *ListUserTasksPar
 	}
 
 	// 搜索成功 构造list
-	list := make([]*dto.UserTaskListItem, 0, len(tasks))
-	for _, task := range tasks {
+	list := make([]*dto.UserTaskListItem, 0, len(result.List))
+	for _, task := range result.List {
 		if task == nil { // 防御
 			continue
 		}
@@ -524,16 +527,17 @@ func (s *TaskService) ListUserTasks(ctx context.Context, param *ListUserTasksPar
 	}
 
 	logger.Info("list user tasks success",
-		zap.Int64("total", total),
+		zap.Bool("has_more", result.HasMore),
 		zap.Int("list_size", len(list)),
 	)
 
 	// 成功 构造响应
 	return &dto.UserTaskListResp{
 		List:     list,
-		Total:    int(total),
+		Total:    utils.SafePtrClone(result.Total),
 		Page:     page,
 		PageSize: pageSize,
+		HasMore:  result.HasMore,
 	}, nil
 }
 
@@ -576,7 +580,7 @@ func (s *TaskService) GetTaskDetail(ctx context.Context, param *GetTaskDetailPar
 	}
 
 	// 获取任务详情
-	// 一个用户可以查看的用户详情：他也是这个项目中的成员、他自己的任务
+	// 一个用户可以查看的任务详情：他也是这个项目中的成员、他自己的任务
 	task, err := s.tr.GetTaskByID(ctx, param.TaskID)
 	if err != nil {
 		if errors.Is(err, repository.ErrTaskNotFound) {
@@ -1396,7 +1400,7 @@ type taskSvcProjectMemberRepo interface {
 // taskSvcTaskRepo 任务仓储接口
 type taskSvcTaskrRepo interface {
 	CreateWithTx(ctx context.Context, tx *gorm.DB, task *model.Task) error
-	SearchTasks(ctx context.Context, query *repository.TaskSearchQuery) ([]*model.Task, int64, error)
+	SearchTasks(ctx context.Context, query *repository.TaskSearchQuery) (*repository.TaskSearchResult, error)
 	GetTaskByID(ctx context.Context, taskID uint64) (*model.Task, error)
 	UpdateTaskByIDWithTx(ctx context.Context, tx *gorm.DB, taskID uint64, param *repository.UpdateTaskParam) error
 	BatchUpdateTaskSortWithTx(ctx context.Context,

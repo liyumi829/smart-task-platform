@@ -4,6 +4,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"smart-task-platform/internal/api/contextx"
 	"smart-task-platform/internal/dto"
@@ -140,6 +141,20 @@ func (h *TaskHandler) CreateTask(c *gin.Context) {
 			logger.Warn("create task rejected: assignee is not project member")
 			response.Fail(c, errmsg.AssigneeNotProjectMember)
 
+		// 客户端主动断开或请求被取消，压测时常见，不作为服务端错误
+		case errors.Is(err, context.Canceled):
+			logger.Warn("create task canceled",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.ClientNotFound)
+
+		// 请求超时，需要重点关注
+		case errors.Is(err, context.DeadlineExceeded):
+			logger.Error("create task deadline exceeded",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.TooManyRequest)
+
 		// 其它错误
 		default:
 			logger.Error("create task failed", zap.Error(err))
@@ -213,6 +228,7 @@ func (h *TaskHandler) ListProjectTasks(c *gin.Context) {
 		ProjectID: projectID,
 		Page:      query.Page,
 		PageSize:  query.PageSize,
+		NeedTotal: query.NeedTotal,
 		Status:    status,
 		Priority:  priority,
 		Keyword:   keyword,
@@ -279,6 +295,20 @@ func (h *TaskHandler) ListProjectTasks(c *gin.Context) {
 			logger.Warn("list project tasks rejected: assignee is not project member")
 			response.Fail(c, errmsg.AssigneeNotProjectMember)
 
+		// 客户端主动断开或请求被取消，压测时常见，不作为服务端错误
+		case errors.Is(err, context.Canceled):
+			logger.Warn("list project tasks canceled",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.ClientNotFound)
+
+		// 请求超时，需要重点关注
+		case errors.Is(err, context.DeadlineExceeded):
+			logger.Error("list project tasks deadline exceeded",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.TooManyRequest)
+
 		// 其它错误
 		default:
 			logger.Error("list project tasks failed", zap.Error(err))
@@ -336,6 +366,7 @@ func (h *TaskHandler) ListUserTasks(c *gin.Context) {
 		UserID:    userID,
 		Page:      query.Page,
 		PageSize:  query.PageSize,
+		NeedTotal: query.NeedTotal,
 		Status:    status,
 		Priority:  priority,
 		Keyword:   keyword,
@@ -386,6 +417,20 @@ func (h *TaskHandler) ListUserTasks(c *gin.Context) {
 		case errors.Is(err, service.ErrProjectForbidden):
 			logger.Warn("list user tasks rejected: project forbidden")
 			response.Fail(c, errmsg.ProjectNoPermission)
+
+		// 客户端主动断开或请求被取消，压测时常见，不作为服务端错误
+		case errors.Is(err, context.Canceled):
+			logger.Warn("list user tasks canceled",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.ClientNotFound)
+
+		// 请求超时，需要重点关注
+		case errors.Is(err, context.DeadlineExceeded):
+			logger.Error("list user tasks deadline exceeded",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.TooManyRequest)
 
 		default:
 			logger.Error("list user tasks failed", zap.Error(err))
@@ -456,6 +501,20 @@ func (h *TaskHandler) GetTaskDetail(c *gin.Context) {
 		case errors.Is(err, service.ErrTaskForbidden):
 			logger.Warn("get task detail rejected: task forbidden")
 			response.Fail(c, errmsg.TaskNoPermission)
+
+		// 客户端主动断开或请求被取消，压测时常见，不作为服务端错误
+		case errors.Is(err, context.Canceled):
+			logger.Warn("get task detail canceled",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.ClientNotFound)
+
+		// 请求超时，需要重点关注
+		case errors.Is(err, context.DeadlineExceeded):
+			logger.Error("get task detail deadline exceeded",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.TooManyRequest)
 
 		// 其它错误
 		default:
@@ -576,6 +635,20 @@ func (h *TaskHandler) UpdateTaskBaseInfo(c *gin.Context) {
 			logger.Warn("update task base info rejected: task forbidden")
 			response.Fail(c, errmsg.TaskNoPermission)
 
+		// 客户端主动断开或请求被取消，压测时常见，不作为服务端错误
+		case errors.Is(err, context.Canceled):
+			logger.Warn("update task base info canceled",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.ClientNotFound)
+
+		// 请求超时，需要重点关注
+		case errors.Is(err, context.DeadlineExceeded):
+			logger.Error("update task base info deadline exceeded",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.TooManyRequest)
+
 		// 其它错误
 		default:
 			logger.Error("update task base info failed", zap.Error(err))
@@ -656,6 +729,20 @@ func (h *TaskHandler) UpdateTaskStatus(c *gin.Context) {
 		case errors.Is(err, service.ErrTaskForbidden):
 			logger.Warn("update task status rejected: task forbidden")
 			response.Fail(c, errmsg.TaskNoPermission)
+
+		// 客户端主动断开或请求被取消，压测时常见，不作为服务端错误
+		case errors.Is(err, context.Canceled):
+			logger.Warn("update task status canceled",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.ClientNotFound)
+
+		// 请求超时，需要重点关注
+		case errors.Is(err, context.DeadlineExceeded):
+			logger.Error("update task status deadline exceeded",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.TooManyRequest)
 
 		// 其它错误
 		default:
@@ -745,6 +832,20 @@ func (h *TaskHandler) UpdateTaskAssignee(c *gin.Context) {
 			logger.Warn("update task assignee rejected: assignee is not project member")
 			response.Fail(c, errmsg.AssigneeNotProjectMember)
 
+		// 客户端主动断开或请求被取消，压测时常见，不作为服务端错误
+		case errors.Is(err, context.Canceled):
+			logger.Warn("update task assignee canceled",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.ClientNotFound)
+
+		// 请求超时，需要重点关注
+		case errors.Is(err, context.DeadlineExceeded):
+			logger.Error("update task assignee deadline exceeded",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.TooManyRequest)
+
 		// 其它错误
 		default:
 			logger.Error("update task assignee failed", zap.Error(err))
@@ -830,6 +931,20 @@ func (h *TaskHandler) UpdateTaskSortOrder(c *gin.Context) {
 			logger.Warn("update task sort order failed: no rows updated")
 			response.Fail(c, errmsg.InvalidTaskSortItem)
 
+		// 客户端主动断开或请求被取消，压测时常见，不作为服务端错误
+		case errors.Is(err, context.Canceled):
+			logger.Warn("update task sort order canceled",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.ClientNotFound)
+
+		// 请求超时，需要重点关注
+		case errors.Is(err, context.DeadlineExceeded):
+			logger.Error("update task sort order deadline exceeded",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.TooManyRequest)
+
 		// 其它错误
 		default:
 			logger.Error("update task sort order failed", zap.Error(err))
@@ -893,6 +1008,20 @@ func (h *TaskHandler) RemoveTask(c *gin.Context) {
 		case errors.Is(err, service.ErrTaskNotFound):
 			logger.Warn("delete task failed: task not found")
 			response.Fail(c, errmsg.TaskNoPermission)
+
+		// 客户端主动断开或请求被取消，压测时常见，不作为服务端错误
+		case errors.Is(err, context.Canceled):
+			logger.Warn("delete task failed canceled",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.ClientNotFound)
+
+		// 请求超时，需要重点关注
+		case errors.Is(err, context.DeadlineExceeded):
+			logger.Error("delete task failed deadline exceeded",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.TooManyRequest)
 
 		// 其它错误
 		default:

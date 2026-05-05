@@ -7,6 +7,7 @@ import (
 	"errors"
 	"smart-task-platform/internal/dto"
 	"smart-task-platform/internal/model"
+	"smart-task-platform/internal/pkg/utils"
 	"smart-task-platform/internal/pkg/validator"
 	"smart-task-platform/internal/repository"
 	"strings"
@@ -179,11 +180,12 @@ func (s *ProjectService) CreateProject(ctx context.Context, param *CreateProject
 
 // ListProjectsParam 获取项目列表参数
 type ListProjectsParam struct {
-	UserID   uint64 // 当前登录用户 ID
-	Page     int    // 页码
-	PageSize int    // 每页数量
-	Status   string // 项目状态
-	Keyword  string // 搜索关键词
+	UserID    uint64 // 当前登录用户 ID
+	Page      int    // 页码
+	PageSize  int    // 每页数量
+	NeedTotal bool   // 是否需要总数
+	Status    string // 项目状态
+	Keyword   string // 搜索关键词
 }
 
 // ListProjects 获取项目列表
@@ -225,16 +227,20 @@ func (s *ProjectService) ListProjects(ctx context.Context, param *ListProjectsPa
 
 		return &dto.ProjectListResp{
 			List:     []*dto.ProjectListItem{},
-			Total:    0,
+			Total:    utils.Int64Ptr(0),
 			Page:     page,
 			PageSize: pageSize,
 		}, nil
 	}
+	logger = logger.With(zap.Int("project_number", len(projectIDs)))
 
 	// 参数校验完成，进行搜索
-	projects, total, err := s.pr.SearchProjects(ctx, &repository.ProjectSearchQuery{
-		Page:       page,
-		PageSize:   pageSize,
+	result, err := s.pr.SearchProjects(ctx, &repository.ProjectSearchQuery{
+		SearchQuery: repository.SearchQuery{
+			Page:      page,
+			PageSize:  pageSize,
+			NeedTotal: param.NeedTotal,
+		},
 		Status:     status,
 		Keyword:    keyword,
 		ProjectIDs: projectIDs,
@@ -245,8 +251,8 @@ func (s *ProjectService) ListProjects(ctx context.Context, param *ListProjectsPa
 	}
 
 	// 搜索成功
-	list := make([]*dto.ProjectListItem, 0, len(projects))
-	for _, project := range projects {
+	list := make([]*dto.ProjectListItem, 0, len(result.List))
+	for _, project := range result.List {
 		if project == nil {
 			logger.Warn("list project skipped: nil project")
 			continue
@@ -264,16 +270,17 @@ func (s *ProjectService) ListProjects(ctx context.Context, param *ListProjectsPa
 	}
 
 	logger.Info("list projects success",
-		zap.Int64("total", total),
+		zap.Bool("has_more", result.HasMore),
 		zap.Int("result_count", len(list)),
 	)
 
 	// 构造成功
 	return &dto.ProjectListResp{
 		List:     list,
-		Total:    int(total),
+		Total:    utils.SafePtrClone(result.Total),
 		Page:     page,
 		PageSize: pageSize,
+		HasMore:  result.HasMore,
 	}, nil
 }
 
@@ -536,7 +543,7 @@ type projectSvcUserRepo interface {
 
 type projectSvcProjectRepo interface {
 	CreateWithTx(ctx context.Context, tx *gorm.DB, project *model.Project) error
-	SearchProjects(ctx context.Context, query *repository.ProjectSearchQuery) ([]*model.Project, int64, error)
+	SearchProjects(ctx context.Context, query *repository.ProjectSearchQuery) (*repository.SearchProjectResult, error)
 	GetDetailByID(ctx context.Context, id uint64) (*model.Project, error)
 	UpdateProjectInformationWithTx(ctx context.Context, tx *gorm.DB, id uint64, data *repository.UpdateProjectData) error
 	ArchiveProjectWithTx(ctx context.Context, tx *gorm.DB, id uint64) error

@@ -42,47 +42,96 @@ func (r *taskCommentRepository) CreateCommentWithTx(ctx context.Context, tx *gor
 
 // SearchTaskCommentsQuery 搜索任务列表参数
 type SearchTaskCommentsQuery struct {
-	TaskID   uint64 // 任务ID
-	Page     int    // 页码
-	PageSize int    // 页码大小
+	TaskID uint64 // 任务ID
+	SearchQuery
 }
 
-// SearchComments 搜索任务评论列表
-//   - 默认按照创建时间排序
-func (r *taskCommentRepository) SearchComments(ctx context.Context, query *SearchTaskCommentsQuery) ([]*model.TaskComment, int64, error) {
-	if query == nil {
-		return nil, 0, ErrInvalidTaskCommentParam
+type SearchTaskCommentResult = SearchResult[*model.TaskComment]
+
+// SearchComments 搜索任务评论列表。
+// 说明：
+// 1. 按任务 ID 查询评论
+// 2. 默认按照创建时间倒序排序
+// 3. total 按需查询，避免每次 COUNT(*) 带来的性能开销
+// 4. hasMore 通过 Limit(pageSize + 1) 判断，不依赖 total
+func (r *taskCommentRepository) SearchComments(ctx context.Context, query *SearchTaskCommentsQuery) (*SearchTaskCommentResult, error) {
+	// 参数校验：query 不能为空，TaskID 必须有效。
+	if query == nil || query.TaskID <= 0 {
+		return nil, ErrInvalidTaskCommentParam
 	}
-	// 完全相信上层参数
-	db := getDB(ctx, r.db, nil).
+
+	// 参数的矫正交给上层，这里只做必要兜底，避免非法分页导致异常 SQL。
+	if query.Page <= 0 || query.PageSize <= 0 {
+		return nil, ErrInvalidTaskCommentParam
+	}
+
+	// 构建基础查询条件。
+	baseDB := getDB(ctx, r.db, nil).
 		Model(&model.TaskComment{}).
 		Where(model.TaskCommentColumnTaskID+" = ?", query.TaskID)
 
-	// 统计总数
-	var total int64
-	if err := db.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-	if total <= 0 {
-		return []*model.TaskComment{}, 0, nil
+	var totalPtr *int64
+
+	// total 按需查询：
+	// 通常首次进入、手动刷新、筛选条件变化时 NeedTotal=true；
+	// 普通翻页时 NeedTotal=false，避免重复 COUNT(*)。
+	if query.NeedTotal {
+		var total int64
+		if err := baseDB.Count(&total).Error; err != nil {
+			return nil, err
+		}
+
+		totalPtr = &total
+
+		// 如果总数为 0，直接返回空结果，避免继续查询列表。
+		if total == 0 {
+			return &SearchTaskCommentResult{
+				List:    []*model.TaskComment{},
+				Total:   totalPtr,
+				HasMore: false,
+			}, nil
+		}
 	}
 
-	// 分页查询
+	// 计算分页偏移量。
 	offset := (query.Page - 1) * query.PageSize
-	comments := make([]*model.TaskComment, 0, query.PageSize)
 
-	listDB := db.
-		Preload(model.TaskCommentAssocAuthor).
-		Preload(model.TaskCommentAssocReplyToUser).
+	// 多查一条用于判断是否还有下一页。
+	limit := query.PageSize + 1
+
+	comments := make([]*model.TaskComment, 0, limit)
+
+	if err := baseDB.
+		Preload(model.TaskCommentAssocAuthor, SelectUserFields).
+		Preload(model.TaskCommentAssocReplyToUser, SelectUserFields).
+		Select([]string{
+			model.TaskCommentColumnID,
+			model.TaskCommentColumnTaskID,
+			model.TaskCommentColumnContent,
+			model.TaskCommentColumnAuthorID,
+			model.TaskCommentColumnParentID,
+			model.TaskCommentColumnReplyToUserID,
+			model.TaskCommentColumnCreatedAt,
+		}).
+		Order(model.TaskCommentColumnCreatedAt + " DESC").
+		Order(model.TaskCommentColumnID + " DESC"). // 创建时间相同时使用 ID 兜底排序，保证分页稳定。
 		Offset(offset).
-		Limit(query.PageSize).
-		Order(model.TaskCommentColumnCreatedAt + " DESC")
-
-	if err := listDB.Find(&comments).Error; err != nil {
-		return nil, 0, err
+		Limit(limit).
+		Find(&comments).Error; err != nil {
+		return nil, err
 	}
 
-	return comments, total, nil
+	// 通过多查的一条数据判断 hasMore，不依赖 total。
+	hasMore := len(comments) > query.PageSize
+	if hasMore {
+		comments = comments[:query.PageSize]
+	}
+
+	return &SearchTaskCommentResult{
+		List:    comments,
+		Total:   totalPtr,
+		HasMore: hasMore,
+	}, nil
 }
 
 // SoftDeleteCommentWithTx 软删除评论
@@ -132,8 +181,8 @@ func (r *taskCommentRepository) GetCommentByID(ctx context.Context, commentID ui
 	return &comment, nil
 }
 
-// GetCommentsByIDsIncludeDeleted 批量查询评论，包括已软删除评论
-func (r *taskCommentRepository) GetCommentsByIDsIncludeDeleted(
+// GetTaskCommentDeleteStatusByIDs  批量查询评论，包括已软删除评论
+func (r *taskCommentRepository) GetTaskCommentDeleteStatusByIDs(
 	ctx context.Context,
 	ids []uint64,
 ) ([]*model.TaskComment, error) {
@@ -144,8 +193,12 @@ func (r *taskCommentRepository) GetCommentsByIDsIncludeDeleted(
 	var comments []*model.TaskComment
 
 	err := r.db.WithContext(ctx).
-		Unscoped(). // 查询包含软删除数据
-		Where("id IN ?", ids).
+		Unscoped().      // 查询包含软删除数据
+		Select([]string{ // 查询ID和deleteAt
+			model.TaskCommentColumnID,
+			model.TaskCommentColumnDeletedAt,
+		}).
+		Where(model.TaskCommentColumnID+" IN ?", ids).
 		Find(&comments).Error
 
 	if err != nil {

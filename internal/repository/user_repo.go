@@ -12,9 +12,11 @@ import (
 )
 
 var (
-	ErrUserIsEmpty     = errors.New("user cannot be empty")     // 用户对象为空
-	ErrPasswordIsEmpty = errors.New("password cannot be empty") // 密码不能为空
-	ErrUserNotFound    = errors.New("user not found")           // 用户未找到错误消息
+	ErrUserIsEmpty           = errors.New("user cannot be empty")             // 用户对象为空
+	ErrPasswordIsEmpty       = errors.New("password cannot be empty")         // 密码不能为空
+	ErrUserNotFound          = errors.New("user not found")                   // 用户未找到
+	ErrInvalidUserParam      = errors.New("invalid user param")               // 用户参数非法
+	ErrUserUpdateDataIsEmpty = errors.New("user update data cannot be empty") // 用户更新数据为空
 )
 
 // userRepository 用户仓储实现
@@ -30,7 +32,7 @@ func NewUserRepository(db *gorm.DB) *userRepository {
 // Create 创建用户
 func (r *userRepository) Create(ctx context.Context, tx *gorm.DB, user *model.User) error {
 	if user == nil {
-		return errors.New("user is nil")
+		return ErrUserIsEmpty
 	}
 
 	return getDB(ctx, r.db, tx).
@@ -39,6 +41,10 @@ func (r *userRepository) Create(ctx context.Context, tx *gorm.DB, user *model.Us
 
 // GetByID 根据 ID 查询用户
 func (r *userRepository) GetByID(ctx context.Context, id uint64) (*model.User, error) {
+	if id == 0 {
+		return nil, ErrInvalidUserParam
+	}
+
 	var user model.User
 	err := getDB(ctx, r.db, nil).
 		Where(model.UserColumnID+" = ?", id).
@@ -56,12 +62,12 @@ func (r *userRepository) GetByID(ctx context.Context, id uint64) (*model.User, e
 
 // GetByAccount 根据用户名或邮箱查询用户
 func (r *userRepository) GetByAccount(ctx context.Context, account string) (*model.User, error) {
+	if account == "" {
+		return nil, ErrInvalidUserParam
+	}
 	var user model.User
 	err := getDB(ctx, r.db, nil).
-		Where(
-			r.db.Where(model.UserColumnUsername, account).
-				Or(model.UserColumnEmail, account),
-		).
+		Where(model.UserColumnUsername+" = ? OR "+model.UserColumnEmail+" = ?", account, account).
 		First(&user).Error
 	if err != nil {
 		if errors.Is(err, gorm.ErrRecordNotFound) {
@@ -73,40 +79,73 @@ func (r *userRepository) GetByAccount(ctx context.Context, account string) (*mod
 	return &user, nil
 }
 
-// ExistsByUsername 检查用户名是否存在
+// ExistsByUsername 检查用户名是否存在。
 func (r *userRepository) ExistsByUsername(ctx context.Context, username string) (bool, error) {
-	var count int64
+	if username == "" {
+		return false, ErrInvalidUserParam
+	}
+
+	var id uint64
+
 	err := getDB(ctx, r.db, nil).
 		Model(&model.User{}).
+		Select(model.UserColumnID).
 		Where(model.UserColumnUsername+" = ?", username).
-		Count(&count).Error
+		Limit(1).
+		Take(&id).Error
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
 		return false, err
 	}
 
-	return count > 0, nil
+	return true, nil
 }
 
-// ExistsByEmail 检查邮箱是否存在
+// ExistsByEmail 检查邮箱是否存在。
 func (r *userRepository) ExistsByEmail(ctx context.Context, email string) (bool, error) {
-	var count int64
+	if email == "" {
+		return false, ErrInvalidUserParam
+	}
+
+	var id uint64
+
 	err := getDB(ctx, r.db, nil).
 		Model(&model.User{}).
-		Where("email = ?", email).
-		Count(&count).Error
+		Select(model.UserColumnID).
+		Where(model.UserColumnEmail+" = ?", email).
+		Limit(1).
+		Take(&id).Error
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
 		return false, err
 	}
 
-	return count > 0, nil
+	return true, nil
 }
 
-// UpdateLastLoginAtWithTx 事务更新最后登录时间
+// UpdateLastLoginAtWithTx 事务更新最后登录时间。
 func (r *userRepository) UpdateLastLoginAtWithTx(ctx context.Context, tx *gorm.DB, userID uint64, loginAt time.Time) error {
-	return getDB(ctx, r.db, tx).
+	if userID == 0 || loginAt.IsZero() {
+		return ErrInvalidUserParam
+	}
+
+	result := getDB(ctx, r.db, tx).
 		Model(&model.User{}).
 		Where(model.UserColumnID+" = ?", userID).
-		Update(model.UserColumnLastLoginAt, loginAt).Error
+		Update(model.UserColumnLastLoginAt, loginAt)
+
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrUserNotFound
+	}
+
+	return nil
 }
 
 // UpdateUserProfileWithTx 事务更新用户昵称和头像
@@ -117,6 +156,10 @@ func (r *userRepository) UpdateUserProfileWithTx(
 	nickname string,
 	avatar string,
 ) error {
+
+	if userID == 0 {
+		return ErrInvalidUserParam
+	}
 
 	updates := map[string]interface{}{
 		model.UserColumnUpdatedAt: time.Now(),
@@ -129,102 +172,164 @@ func (r *userRepository) UpdateUserProfileWithTx(
 		updates[model.UserColumnAvatar] = avatar
 	}
 
-	return getDB(ctx, r.db, tx).
+	if len(updates) == 1 {
+		return ErrUserUpdateDataIsEmpty
+	}
+
+	result := getDB(ctx, r.db, tx).
 		Model(&model.User{}).
 		Where(model.UserColumnID+" = ?", userID).
-		Updates(updates).Error
+		Updates(updates)
+
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrUserNotFound
+	}
+
+	return nil
 }
 
-// UpdateUserPasswordWithTx 事务修改用户的密码
+// UpdateUserPasswordWithTx 事务修改用户密码。
 func (r *userRepository) UpdateUserPasswordWithTx(
 	ctx context.Context,
 	tx *gorm.DB,
 	userID uint64,
 	password string,
 ) error {
+	if userID == 0 {
+		return ErrInvalidUserParam
+	}
 	if password == "" {
-		return ErrPasswordIsEmpty // 返回密码为空的错误
+		return ErrPasswordIsEmpty
 	}
 
-	return getDB(ctx, r.db, tx).
+	result := getDB(ctx, r.db, tx).
 		Model(&model.User{}).
 		Where(model.UserColumnID+" = ?", userID).
 		Updates(map[string]interface{}{
 			model.UserColumnPassword:  password,
 			model.UserColumnUpdatedAt: time.Now(),
-		}).Error
+		})
+
+	if result.Error != nil {
+		return result.Error
+	}
+	if result.RowsAffected == 0 {
+		return ErrUserNotFound
+	}
+
+	return nil
 }
 
-// UserSearchQuery 用户搜索查询参数
+// UserSearchQuery 用户搜索查询参数。
 type UserSearchQuery struct {
-	Page     int    // 页码
-	PageSize int    // 页码大小
-	Keyword  string // 搜索关键词
+	Keyword string
+	SearchQuery
 }
 
-// SearchUsers 搜索用户列表
+type SearchUserResult = SearchResult[*model.User]
+
+// SearchUsers 搜索用户列表。
 // 说明：
-// 1. 支持按 username 模糊搜索
+// 1. 支持按 username 前缀模糊搜索
 // 2. 支持分页
-// 3. 返回当前条件下总数 total
-// 4. keyword 为空时直接返回空列表，避免全表扫描
-func (r *userRepository) SearchUsers(ctx context.Context, query *UserSearchQuery) ([]*model.User, int64, error) {
-	var (
-		users []*model.User
-		total int64
-	)
+// 3. total 按需查询，避免每次 COUNT(*) 带来的性能开销
+// 4. hasMore 通过 Limit(pageSize + 1) 判断，不依赖 total
+// 5. keyword 为空时直接返回空列表，避免全表扫描
+func (r *userRepository) SearchUsers(ctx context.Context, query *UserSearchQuery) (*SearchUserResult, error) {
+	// 参数校验：避免非法分页和空关键词导致全表扫描。
+	if query == nil || query.Page <= 0 || query.PageSize <= 0 || query.Keyword == "" {
+		return &SearchUserResult{
+			List:    []*model.User{},
+			Total:   nil,
+			HasMore: false,
+		}, nil
+	}
 
-	// 获取参数
-	page := query.Page
-	pageSize := query.PageSize
+	// 计算分页偏移量。
+	offset := (query.Page - 1) * query.PageSize
 
-	offset := (page - 1) * pageSize    // 偏移量
-	likePattern := query.Keyword + "%" // 模糊匹配关键词 key%
+	// 使用前缀匹配，便于数据库利用索引。
+	likePattern := query.Keyword + "%"
 
-	db := getDB(ctx, r.db, nil).
+	// 构建基础查询条件。
+	baseDB := getDB(ctx, r.db, nil).
 		Model(&model.User{}).
-		Where(model.UserColumnStatus, model.UserStatusActive).
+		Where(model.UserColumnStatus+" = ?", model.UserStatusActive).
 		Where(model.UserColumnUsername+" LIKE ?", likePattern)
 
-	// 获取查询结果的查询总数
-	if err := db.Count(&total).Error; err != nil {
-		return nil, 0, err
+	var totalPtr *int64
+
+	// total 按需查询：
+	// 通常首次进入、手动刷新、筛选条件变化时 NeedTotal=true；
+	// 普通翻页时 NeedTotal=false，避免重复 COUNT(*)。
+	if query.NeedTotal {
+		var total int64
+		if err := baseDB.Count(&total).Error; err != nil {
+			return nil, err
+		}
+		totalPtr = &total
+
+		// 如果总数为 0，直接返回空结果，避免继续查询列表。
+		if total == 0 {
+			return &SearchUserResult{
+				List:    []*model.User{},
+				Total:   totalPtr,
+				HasMore: false,
+			}, nil
+		}
 	}
 
-	// 如果没有数据，直接返回，避免无意义查询
-	if total == 0 {
-		return []*model.User{}, 0, nil
+	// 多查一条用于判断是否还有下一页。
+	limit := query.PageSize + 1
+
+	users := make([]*model.User, 0, limit)
+	if err := baseDB.
+		Select([]string{
+			model.UserColumnID,
+			model.UserColumnUsername,
+			model.UserColumnNickname,
+			model.UserColumnAvatar,
+		}).
+		Order(model.UserColumnUsername + " ASC").
+		Order(model.UserColumnID + " DESC").
+		Offset(offset).
+		Limit(limit).
+		Find(&users).Error; err != nil {
+		return nil, err
 	}
 
-	// 查询当前页数据
-	err := db.Select(
-		model.UserColumnID,
-		model.UserColumnUsername,
-		model.UserColumnNickname,
-		model.UserColumnAvatar,
-	).
-		Order(model.UserColumnUsername + " ASC"). // 以用户名进行排序升序排序
-		Offset(offset).                           // 偏移量
-		Limit(pageSize).                          // limit限制
-		Find(&users).Error
-	if err != nil {
-		return nil, 0, err
+	// 通过多查的一条数据判断 hasMore，不依赖 total。
+	hasMore := len(users) > query.PageSize
+	if hasMore {
+		users = users[:query.PageSize]
 	}
 
-	return users, total, nil
+	return &SearchUserResult{
+		List:    users,
+		Total:   totalPtr,
+		HasMore: hasMore,
+	}, nil
 }
 
 // ExistsByUserID 根据用户ID判断用户是否存在
 func (r *userRepository) ExistsByUserID(ctx context.Context, userID uint64) (bool, error) {
-	var count int64
+	var id int64
 	err := getDB(ctx, r.db, nil).
 		Model(&model.User{}).
+		Select(model.UserColumnID).
 		Where(model.UserColumnID+" = ?", userID).
 		Limit(1).
-		Count(&count).Error
+		Take(&id).Error
+
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
 		return false, err
 	}
 
-	return count > 0, nil
+	return true, nil
 }

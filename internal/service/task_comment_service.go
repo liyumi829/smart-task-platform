@@ -8,6 +8,7 @@ import (
 	"errors"
 	"smart-task-platform/internal/dto"
 	"smart-task-platform/internal/model"
+	"smart-task-platform/internal/pkg/utils"
 	"smart-task-platform/internal/pkg/validator"
 	"smart-task-platform/internal/repository"
 
@@ -133,13 +134,13 @@ func (s *TaskCommentService) CreateTaskComment(ctx context.Context, param *Creat
 		if err != nil {
 			if errors.Is(err, repository.ErrTaskCommentNotFound) {
 				// 父评论不存在
-				logger.Warn("create task comment failed: parent comment not found",
+				logger.Warn("create task comment failed: parentComment comment not found",
 					zap.Error(err),
 				)
 				return nil, ErrParentCommentNotFound
 			}
 
-			logger.Error("create task comment failed: get parent comment error",
+			logger.Error("create task comment failed: get parentComment comment error",
 				zap.Error(err),
 			)
 			return nil, err
@@ -147,7 +148,7 @@ func (s *TaskCommentService) CreateTaskComment(ctx context.Context, param *Creat
 
 		// 父评论存在，检查父评论是否是当前任务
 		if parentComment.TaskID != param.TaskID {
-			logger.Warn("create task comment failed: parent comment does not belong to task",
+			logger.Warn("create task comment failed: parentComment comment does not belong to task",
 				zap.Uint64("parent_comment_task_id", parentComment.TaskID),
 			)
 			return nil, ErrInvalidParentComment // 返回不合法的父评论
@@ -221,6 +222,7 @@ type ListTaskCommentsParam struct {
 	TaskID    uint64 // 任务ID
 	Page      int    // 页码
 	PageSize  int    // 数量
+	NeedTotal bool   // 是否查询总数
 }
 
 // ListTaskComments 查询任务评论列表
@@ -266,10 +268,13 @@ func (s *TaskCommentService) ListTaskComments(ctx context.Context, param *ListTa
 	}
 
 	// 搜索评论
-	comments, total, err := s.tcr.SearchComments(ctx, &repository.SearchTaskCommentsQuery{
-		TaskID:   task.ID,
-		Page:     page,
-		PageSize: pageSize,
+	result, err := s.tcr.SearchComments(ctx, &repository.SearchTaskCommentsQuery{
+		TaskID: task.ID,
+		SearchQuery: repository.SearchQuery{
+			Page:      page,
+			PageSize:  pageSize,
+			NeedTotal: param.NeedTotal,
+		},
 	})
 	if err != nil {
 		logger.Error("list task comments failed: search comments error",
@@ -279,7 +284,7 @@ func (s *TaskCommentService) ListTaskComments(ctx context.Context, param *ListTa
 	}
 
 	// 收集父评论 ID
-	parentIDs := collectTaskCommentParentIDs(comments)
+	parentIDs := collectTaskCommentParentIDs(result.List)
 
 	// 查询父评论删除状态
 	parentDeletedMap, err := s.buildParentDeletedMap(ctx, parentIDs)
@@ -288,21 +293,22 @@ func (s *TaskCommentService) ListTaskComments(ctx context.Context, param *ListTa
 	}
 
 	// 搜索成功 构造list
-	list := make([]*dto.TaskCommentListItem, 0, len(comments))
-	for _, comment := range comments {
+	list := make([]*dto.TaskCommentListItem, 0, len(result.List))
+	for _, comment := range result.List {
 		list = append(list, buildTaskCommentItem(comment, parentDeletedMap))
 	}
 
 	logger.Info("list task comments success",
 		zap.Int("list_count", len(list)),
-		zap.Int64("total", total),
+		zap.Bool("has_more", result.HasMore),
 	)
 
 	return &dto.ListTaskCommentsResp{
 		List:     list,
-		Total:    int(total),
+		Total:    utils.SafePtrClone(result.Total),
 		Page:     page,
 		PageSize: pageSize,
+		HasMore:  result.HasMore,
 	}, nil
 }
 
@@ -441,12 +447,11 @@ type taskCommentSVCTaskRepo interface {
 // taskCommentSVCCommentRepo 评论服务依赖的评论仓储能力
 type taskCommentSVCCommentRepo interface {
 	CreateCommentWithTx(ctx context.Context, tx *gorm.DB, comment *model.TaskComment) error
-	SearchComments(ctx context.Context, query *repository.SearchTaskCommentsQuery) ([]*model.TaskComment, int64, error)
+	SearchComments(ctx context.Context, query *repository.SearchTaskCommentsQuery) (*repository.SearchTaskCommentResult, error)
 	GetCommentByID(ctx context.Context, commentID uint64) (*model.TaskComment, error)
 	SoftDeleteCommentWithTx(ctx context.Context, tx *gorm.DB, commentID uint64) error
 
-	// 新增：批量查询评论，包括已软删除评论
-	GetCommentsByIDsIncludeDeleted(ctx context.Context, ids []uint64) ([]*model.TaskComment, error)
+	GetTaskCommentDeleteStatusByIDs(ctx context.Context, ids []uint64) ([]*model.TaskComment, error)
 }
 
 // buildParentDeletedMap 构造父评论删除状态映射
@@ -461,28 +466,28 @@ func (s *TaskCommentService) buildParentDeletedMap(
 	}
 
 	// 注意：这里需要 repository 支持查询包括软删除在内的评论
-	parents, err := s.tcr.GetCommentsByIDsIncludeDeleted(ctx, parentIDs)
+	parentComments, err := s.tcr.GetTaskCommentDeleteStatusByIDs(ctx, parentIDs)
 	if err != nil {
 		return nil, err
 	}
 
-	parentMap := make(map[uint64]*model.TaskComment, len(parents))
-	for _, parent := range parents {
-		if parent == nil {
+	parentMap := make(map[uint64]*model.TaskComment, len(parentComments))
+	for _, parentComment := range parentComments {
+		if parentComment == nil {
 			continue
 		}
-		parentMap[parent.ID] = parent
+		parentMap[parentComment.ID] = parentComment
 	}
 
 	for _, parentID := range parentIDs {
-		parent, ok := parentMap[parentID]
+		parentComment, ok := parentMap[parentID]
 		if !ok {
 			// 理论上不应该出现，除非数据异常或父评论被物理删除
 			parentDeletedMap[parentID] = true
 			continue
 		}
 
-		parentDeletedMap[parentID] = parent.DeletedAt.Valid
+		parentDeletedMap[parentID] = parentComment.DeletedAt.Valid
 	}
 
 	return parentDeletedMap, nil

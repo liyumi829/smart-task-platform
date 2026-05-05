@@ -2,6 +2,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 
 	"github.com/gin-gonic/gin"
@@ -75,6 +76,20 @@ func (h *AuthHandler) Register(c *gin.Context) {
 			logger.Warn("register rejected: invalid nickname format")
 			response.Fail(c, errmsg.InvalidNicknameFormat)
 
+		// 客户端主动断开或请求被取消，压测时常见，不作为服务端错误
+		case errors.Is(err, context.Canceled):
+			logger.Warn("register rejected canceled",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.ClientNotFound)
+
+		// 请求超时，需要重点关注
+		case errors.Is(err, context.DeadlineExceeded):
+			logger.Error("register rejected deadline exceeded",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.TooManyRequest)
+
 		// 其他错误
 		default:
 			logger.Error("register failed",
@@ -138,6 +153,20 @@ func (h *AuthHandler) Login(c *gin.Context) {
 		// 操作过于频繁
 		case errors.Is(err, service.ErrOperationTooFrequent):
 			logger.Warn("login rejected: operation too frequent")
+			response.Fail(c, errmsg.TooManyRequest)
+
+		// 客户端主动断开或请求被取消，压测时常见，不作为服务端错误
+		case errors.Is(err, context.Canceled):
+			logger.Warn("login rejected canceled",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.ClientNotFound)
+
+		// 请求超时，需要重点关注
+		case errors.Is(err, context.DeadlineExceeded):
+			logger.Error("login rejected deadline exceeded",
+				zap.Error(err),
+			)
 			response.Fail(c, errmsg.TooManyRequest)
 
 		// 其他错误
@@ -215,6 +244,20 @@ func (h *AuthHandler) Me(c *gin.Context) {
 			logger.Warn("get current user failed: user disabled")
 			response.Fail(c, errmsg.UserDisabled)
 
+		// 客户端主动断开或请求被取消，压测时常见，不作为服务端错误
+		case errors.Is(err, context.Canceled):
+			logger.Warn("get current user canceled",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.ClientNotFound)
+
+		// 请求超时，需要重点关注
+		case errors.Is(err, context.DeadlineExceeded):
+			logger.Error("get current user deadline exceeded",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.TooManyRequest)
+
 		// 其他错误
 		default:
 			logger.Error("get current user failed",
@@ -264,6 +307,20 @@ func (h *AuthHandler) RefreshToken(c *gin.Context) {
 		case errors.Is(err, service.ErrSessionNotExists):
 			logger.Info("refresh token rejected: user logout")
 			response.FailWithMessage(c, errmsg.Unauthorized, "Please log in again")
+
+		// 客户端主动断开或请求被取消，压测时常见，不作为服务端错误
+		case errors.Is(err, context.Canceled):
+			logger.Warn("refresh token canceled",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.ClientNotFound)
+
+		// 请求超时，需要重点关注
+		case errors.Is(err, context.DeadlineExceeded):
+			logger.Error("refresh token deadline exceeded",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.TooManyRequest)
 
 		default:
 			logger.Error("refresh token failed",

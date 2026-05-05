@@ -25,6 +25,7 @@ const (
 	Unauthorized   = 10003 // 未登录或认证失败
 	Forbidden      = 10004 // 无权限访问
 	TooManyRequest = 10005 // 请求过于频繁
+	ClientNotFound = 10006 // 用户断开连接
 
 	// =========================
 	// 认证/用户模块 20000+
@@ -115,6 +116,7 @@ var codeMsgMap = map[int]string{
 	Unauthorized:   "Authentication required",
 	Forbidden:      "Permission denied",
 	TooManyRequest: "Too many requests, please try again later",
+	ClientNotFound: "The client actively closed the connection",
 
 	// =========================
 	// Token / 认证错误信息

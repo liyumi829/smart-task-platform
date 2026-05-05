@@ -53,24 +53,23 @@ run: build
 
 start: build
 	@echo "Starting the application..."
-	@"$(APP_BIN)" \
-	-c "$(CONFIG_FILE)" \
-	-port "$(PORT)" \
-	-host "$(HOST)" \
-	> "$(LOG_DIR)/app.log" 2>&1 &
-	@echo $$! > "$(PID_DIR)/app.pid"
-	@echo "Application is running with PID: $$(cat $(PID_DIR)/app.pid)"
+	@mkdir -p $(LOG_DIR) $(PID_DIR)
+	@$(APP_BIN) \
+	-c $(CONFIG_FILE) \
+	-port $(PORT) \
+	-host $(HOST) \
+	> $(LOG_DIR)/gin.log 2>&1 & echo $$! > $(PID_DIR)/app.pid
+	@echo "Application started successfully, PID: $$(cat $(PID_DIR)/app.pid)"
 
 stop:
 	@echo "Stopping the application..."
 	@kill -9 $$(cat "$(PID_DIR)/app.pid") 2>/dev/null || true
-	@rm -f "$(PID_DIR)/app.pid"
 	@echo "Application stopped."
 
-clean:
+clean: stop
 	@echo "Cleaning build artifacts..."
 	@kill -9 $$(cat "$(PID_DIR)/app.pid") 2>/dev/null || true
-	@rm -rf "$(BUILD_DIR)" "$(PID_DIR)"
+	@rm -rf "$(BUILD_DIR)" "$(PID_DIR)" "$(LOG_DIR)"
 	@echo "Clean completed."	
 
 help:

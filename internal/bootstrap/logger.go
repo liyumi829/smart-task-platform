@@ -61,8 +61,8 @@ func (c *LoggerConfig) setDefault() {
 func InitLogger(c *LoggerConfig) {
 	c.setDefault() // 设置默认值，避免有非法参数传入
 
-	var level zapcore.Level // 日志等级
-	if c.Mode == "prod" {   // 如果项目是生产环境
+	var level zapcore.Level    // 日志等级
+	if c.Mode == ModeRelease { // 如果项目是生产环境
 		level = zap.InfoLevel // 只打印Info以上的信息
 	} else { // 默认运行模式debug
 		level = zap.DebugLevel // 答应调试以上的信息
@@ -82,17 +82,17 @@ func InitLogger(c *LoggerConfig) {
 		EncodeCaller:   zapcore.ShortCallerEncoder,    // 短路径
 	}
 	// encoder := zapcore.NewJSONEncoder(encoderConfig) // 创建编码器 -- 在下面生产环境 Json、开发环境 Console
-	var core zapcore.Core // zap日志库的核心接口
-	if c.Mode == "prod" { // 生产环境级别
-		logDir := c.LogPath                                  // 写入的目录路径
-		_ = os.Mkdir(filepath.Join(logDir, c.LogName), 0755) // 创建目录
+	var core zapcore.Core      // zap日志库的核心接口
+	if c.Mode == ModeRelease { // 生产环境级别
+		logDir := c.LogPath        // 写入的目录路径
+		_ = os.Mkdir(logDir, 0755) // 创建目录
 		lumberLogger := &lumberjack.Logger{
-			Filename:   filepath.Join(logDir, c.LogName, ".log"), // 日志文件
-			MaxSize:    c.MaxSize,                                // 单个文件不超过128MB
-			MaxBackups: c.MaxBackups,                             //最多保存30个日志文件
-			MaxAge:     c.MaxAge,                                 // 最多保存七天
-			Compress:   true,                                     // 压缩旧日志为gz
-			LocalTime:  true,                                     // 使用本地时间
+			Filename:   filepath.Join(logDir, c.LogName+".log"), // 日志文件
+			MaxSize:    c.MaxSize,                               // 单个文件不超过128MB
+			MaxBackups: c.MaxBackups,                            //最多保存30个日志文件
+			MaxAge:     c.MaxAge,                                // 最多保存七天
+			Compress:   true,                                    // 压缩旧日志为gz
+			LocalTime:  true,                                    // 使用本地时间
 		}
 		fileEncoder := zapcore.NewJSONEncoder(encoderConfig)        // 创建Json编码器
 		fileWriteSyncer := zapcore.AddSync(lumberLogger)            // 绑定lumber日志写入器到zap中

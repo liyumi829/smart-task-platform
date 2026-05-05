@@ -204,9 +204,10 @@ func (r *taskRepository) GetTaskByID(ctx context.Context, taskID uint64) (*model
 	}
 
 	var task model.Task
-	err := getDB(ctx, r.db, nil).Preload(model.TaskAssocProject).
-		Preload(model.TaskAssocAssignee).
-		Preload(model.TaskAssocCreator).
+	err := getDB(ctx, r.db, nil).
+		Preload(model.TaskAssocProject, SelectProjectFields).
+		Preload(model.TaskAssocAssignee, SelectUserFields).
+		Preload(model.TaskAssocCreator, SelectUserFields).
 		Model(&model.Task{}).
 		Where(model.TaskColumnID+" = ?", taskID).
 		First(&task).Error
@@ -235,12 +236,16 @@ type TaskSearchQuery struct {
 	Priority   string  // 优先级
 	SortBy     string  // 排序规则
 	SortOrder  string  // 排序顺序（业务处理：要求全部小写）
+	NeedTotal  bool    // 是否查询总数
 }
 
+// TaskSearchResult 任务搜索结果。
+type TaskSearchResult = SearchResult[*model.Task]
+
 // SearchTasks 按照规则批量查询任务
-func (r *taskRepository) SearchTasks(ctx context.Context, query *TaskSearchQuery) ([]*model.Task, int64, error) {
+func (r *taskRepository) SearchTasks(ctx context.Context, query *TaskSearchQuery) (*TaskSearchResult, error) {
 	if query == nil {
-		return nil, 0, ErrInvalidTaskParam
+		return nil, ErrInvalidTaskParam
 	}
 	// 完全相信上层参数
 	db := getDB(ctx, r.db, nil).
@@ -271,24 +276,45 @@ func (r *taskRepository) SearchTasks(ctx context.Context, query *TaskSearchQuery
 		db = db.Where(model.TaskColumnPriority+" = ?", query.Priority)
 	}
 
-	// 统计总数
-	var total int64
-	if err := db.Count(&total).Error; err != nil {
-		return nil, 0, err
+	result := &TaskSearchResult{
+		List:    []*model.Task{},
+		Total:   nil,
+		HasMore: false,
 	}
-	if total <= 0 {
-		return []*model.Task{}, 0, nil
+
+	// 只有 need_total=true 时才执行 COUNT(*)。
+	if query.NeedTotal {
+		var total int64
+		if err := db.Count(&total).Error; err != nil {
+			return nil, err
+		}
+		result.Total = &total
+		if total == 0 {
+			return result, nil
+		}
 	}
 
 	// 分页查询
 	offset := (query.Page - 1) * query.PageSize
+	limit := query.PageSize + 1 // 多查询一个进行比较判断
 	tasks := make([]*model.Task, 0, query.PageSize)
 
 	listDB := db.
-		Preload(model.TaskAssocAssignee).
-		Preload(model.TaskAssocProject).
+		Preload(model.TaskAssocAssignee, SelectUserFields).
+		Preload(model.TaskAssocProject, SelectProjectFields).
+		Select([]string{
+			model.TaskColumnID,
+			model.TaskColumnProjectID,
+			model.TaskColumnTitle,
+			model.TaskColumnStatus,
+			model.TaskColumnPriority,
+			model.TaskColumnAssigneeID,
+			model.TaskColumnDueDate,
+			model.TaskColumnCreatedAt,
+			model.TaskColumnUpdatedAt,
+		}).
 		Offset(offset).
-		Limit(query.PageSize)
+		Limit(limit)
 
 	// 默认排序规则（用户可选：标题、任务优先级、任务状态、预期时间、创建时间）：
 	// 排序值 sort_order（内部使用：默认第一优先级）
@@ -304,11 +330,20 @@ func (r *taskRepository) SearchTasks(ctx context.Context, query *TaskSearchQuery
 		listDB = listDB.Order(order)
 	}
 
+	// 进行查询
 	if err := listDB.Find(&tasks).Error; err != nil {
-		return nil, 0, err
+		return nil, err
 	}
 
-	return tasks, total, nil
+	// 如果结果数量大于 pageSize，说明还有下一页。
+	if len(tasks) > query.PageSize {
+		result.HasMore = true
+		tasks = tasks[:query.PageSize]
+	}
+
+	result.List = tasks
+
+	return result, nil
 }
 
 // TaskSortItem 项目任务排序项

@@ -4,6 +4,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"smart-task-platform/internal/api/contextx"
 	"smart-task-platform/internal/dto"
@@ -112,6 +113,21 @@ func (h *ProjectMemberHandler) AddProjectMember(c *gin.Context) {
 			logger.Warn("add project member rejected: project forbidden")
 			response.Fail(c, errmsg.ProjectNoPermission)
 
+			// 客户端主动断开或请求被取消，压测时常见，不作为服务端错误
+		case errors.Is(err, context.Canceled):
+			logger.Warn("add project member canceled",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.ClientNotFound)
+
+		// 请求超时，需要重点关注
+		case errors.Is(err, context.DeadlineExceeded):
+			logger.Error("add project member deadline exceeded",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.TooManyRequest)
+
+		// 其它错误
 		default:
 			logger.Error("add project member failed", zap.Error(err))
 			response.FailWithMessage(c, errmsg.ServerError, "add project member failed")
@@ -167,6 +183,7 @@ func (h *ProjectMemberHandler) ListProjectMembers(c *gin.Context) {
 		ProjectID: projectID,
 		Page:      query.Page,
 		PageSize:  query.PageSize,
+		NeedTotal: query.NeedTotal,
 		Role:      query.Role,
 		Keyword:   query.Keyword,
 	})
@@ -190,6 +207,20 @@ func (h *ProjectMemberHandler) ListProjectMembers(c *gin.Context) {
 		case errors.Is(err, service.ErrProjectMemberNotFound):
 			logger.Warn("list project members failed: current user is not project member")
 			response.Fail(c, errmsg.ProjectNoPermission)
+
+		// 客户端主动断开或请求被取消，压测时常见，不作为服务端错误
+		case errors.Is(err, context.Canceled):
+			logger.Warn("list project members canceled",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.ClientNotFound)
+
+		// 请求超时，需要重点关注
+		case errors.Is(err, context.DeadlineExceeded):
+			logger.Error("list project members deadline exceeded",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.TooManyRequest)
 
 		// 其它错误
 		default:
@@ -283,6 +314,20 @@ func (h *ProjectMemberHandler) UpdateProjectMember(c *gin.Context) {
 			logger.Warn("update project member rejected: project forbidden")
 			response.Fail(c, errmsg.ProjectNoPermission)
 
+		// 客户端主动断开或请求被取消，压测时常见，不作为服务端错误
+		case errors.Is(err, context.Canceled):
+			logger.Warn("update project member canceled",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.ClientNotFound)
+
+		// 请求超时，需要重点关注
+		case errors.Is(err, context.DeadlineExceeded):
+			logger.Error("update project member deadline exceeded",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.TooManyRequest)
+
 		// 其它错误
 		default:
 			logger.Error("update project member failed", zap.Error(err))
@@ -354,6 +399,20 @@ func (h *ProjectMemberHandler) RemoveProjectMember(c *gin.Context) {
 		case errors.Is(err, service.ErrProjectForbidden):
 			logger.Warn("remove project member rejected: project forbidden")
 			response.Fail(c, errmsg.ProjectNoPermission)
+
+		// 客户端主动断开或请求被取消，压测时常见，不作为服务端错误
+		case errors.Is(err, context.Canceled):
+			logger.Warn("remove project member canceled",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.ClientNotFound)
+
+		// 请求超时，需要重点关注
+		case errors.Is(err, context.DeadlineExceeded):
+			logger.Error("remove project member deadline exceeded",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.TooManyRequest)
 
 		// 其它错误
 		default:

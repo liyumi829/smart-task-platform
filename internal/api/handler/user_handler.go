@@ -2,6 +2,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 
 	"github.com/gin-gonic/gin"
@@ -74,7 +75,21 @@ func (h *UserHandler) UpdateUserProfile(c *gin.Context) {
 			logger.Warn("update user profile failed: user disabled")
 			response.Fail(c, errmsg.UserDisabled)
 
-		// 其它错误
+		// 客户端主动断开或请求被取消，压测时常见，不作为服务端错误
+		case errors.Is(err, context.Canceled):
+			logger.Warn("update user profile canceled",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.ClientNotFound)
+
+		// 请求超时，需要重点关注
+		case errors.Is(err, context.DeadlineExceeded):
+			logger.Error("update user profile deadline exceeded",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.TooManyRequest)
+
+			// 其它错误
 		default:
 			logger.Error("update user profile failed",
 				zap.Error(err),
@@ -140,6 +155,20 @@ func (h *UserHandler) UpdateUserPassword(c *gin.Context) {
 			logger.Warn("update user password rejected: new password same as old")
 			response.Fail(c, errmsg.NewPasswordSameAsOld)
 
+		// 客户端主动断开或请求被取消，压测时常见，不作为服务端错误
+		case errors.Is(err, context.Canceled):
+			logger.Warn("update user password canceled",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.ClientNotFound)
+
+		// 请求超时，需要重点关注
+		case errors.Is(err, context.DeadlineExceeded):
+			logger.Error("update user password deadline exceeded",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.TooManyRequest)
+
 		// 其它错误
 		default:
 			logger.Error("update user password failed",
@@ -183,6 +212,20 @@ func (h *UserHandler) GetUserPublicInfo(c *gin.Context) {
 			logger.Warn("get user public info failed: user not found")
 			response.Fail(c, errmsg.UserNotFound)
 
+		// 客户端主动断开或请求被取消，压测时常见，不作为服务端错误
+		case errors.Is(err, context.Canceled):
+			logger.Warn("get user public info canceled",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.ClientNotFound)
+
+		// 请求超时，需要重点关注
+		case errors.Is(err, context.DeadlineExceeded):
+			logger.Error("get user public info deadline exceeded",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.TooManyRequest)
+
 		// 其它错误
 		default:
 			logger.Error("get user public info failed",
@@ -199,7 +242,7 @@ func (h *UserHandler) GetUserPublicInfo(c *gin.Context) {
 
 // ListUsers 分页搜索用户列表
 func (h *UserHandler) ListUsers(c *gin.Context) {
-	var req dto.UserSearchListQuery
+	var query dto.UserSearchListQuery
 
 	// 构造基础请求日志
 	logger := zap.L().With(
@@ -207,8 +250,8 @@ func (h *UserHandler) ListUsers(c *gin.Context) {
 		zap.String("path", c.FullPath()),
 	)
 
-	if err := c.ShouldBindQuery(&req); err != nil {
-		logger.Warn("bind search user list request failed",
+	if err := c.ShouldBindQuery(&query); err != nil {
+		logger.Warn("bind search user list query failed",
 			zap.Error(err),
 		)
 		response.Fail(c, errmsg.InvalidParams) // 错误的参数
@@ -217,18 +260,43 @@ func (h *UserHandler) ListUsers(c *gin.Context) {
 
 	// 参数解析成功
 	logger = logger.With(
-		zap.String("keyword", req.Keyword),
-		zap.Int("page", req.Page),
-		zap.Int("page_size", req.PageSize),
+		zap.String("keyword", query.Keyword),
+		zap.Int("page", query.Page),
+		zap.Int("page_size", query.PageSize),
+		zap.Bool("need_total", query.NeedTotal),
 	)
 
-	resp, err := h.userService.ListUsers(c.Request.Context(), req.Page, req.PageSize, req.Keyword)
+	resp, err := h.userService.ListUsers(c.Request.Context(), &service.ListUserParam{
+		Page:      query.Page,
+		PageSize:  query.PageSize,
+		KeyWord:   query.Keyword,
+		NeedTotal: query.NeedTotal,
+	})
 	if err != nil {
+
+		switch {
+
+		// 客户端主动断开或请求被取消，压测时常见，不作为服务端错误
+		case errors.Is(err, context.Canceled):
+			logger.Warn("search user list canceled",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.ClientNotFound)
+
+		// 请求超时，需要重点关注
+		case errors.Is(err, context.DeadlineExceeded):
+			logger.Error("search user list deadline exceeded",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.TooManyRequest)
+
 		// 其它错误
-		logger.Error("search user list failed",
-			zap.Error(err),
-		)
-		response.FailWithMessage(c, errmsg.ServerError, "search user list failed")
+		default:
+			logger.Error("search user list failed",
+				zap.Error(err),
+			)
+			response.FailWithMessage(c, errmsg.ServerError, "search user list failed")
+		}
 		return
 	}
 

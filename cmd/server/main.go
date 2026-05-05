@@ -12,6 +12,9 @@ import (
 	"smart-task-platform/internal/repository"
 	"smart-task-platform/internal/service"
 
+	"net/http"
+	_ "net/http/pprof"
+
 	"github.com/gin-gonic/gin"
 )
 
@@ -22,6 +25,11 @@ var (
 )
 
 func main() {
+	// pprof 只监听本机，避免暴露到公网。
+	go func() {
+		log.Println("pprof listening on 127.0.0.1:6060")
+		_ = http.ListenAndServe("127.0.0.1:6060", nil)
+	}()
 	flag.Parse()
 	// 如果读取配置文件出现问题，那么就直接退出程序
 	log.Printf("config file: %s", *configFile)
@@ -50,10 +58,13 @@ func main() {
 	redis := bootstrap.InitRedis(&cfg.Redis)            // Redis 连接
 	jwtManager := bootstrap.InitJWT(&cfg.JWT)           // JWT 管理器
 	authStore := redispkg.NewRedisAuthStore(redis)      // 认证存储管理器
-	// 自动迁移 数据库表结构
-	if err := bootstrap.AutoMigrate(db); err != nil {
-		log.Fatalf("auto migrate failed: %v", err)
-	}
+	// 自动迁移 数据库表结构 ！！！禁用
+	// if cfg.Server.Mode == bootstrap.ModeDev {
+	// 	// 开发环境使用自动建表
+	// 	if err := bootstrap.AutoMigrate(db); err != nil {
+	// 		log.Fatalf("auto migrate failed: %v", err)
+	// 	}
+	// }
 
 	// 事务管理器、初始化仓储
 	txManager := repository.NewTxManager(db)                       // 事务管理器
@@ -78,19 +89,22 @@ func main() {
 	projectMemberHandler := handler.NewProjectMemberHandler(projectMemberService) // 项目成员 Handler
 	taskHandler := handler.NewTaskHandler(taskService)                            // 任务 Handler
 	taskCommentHandler := handler.NewTaskCommentHandler(taskCommentService)       // 任务评论 Handler
-	// 初始化 Gin
-	r := gin.New()
-	r.Use(gin.Logger(), gin.Recovery())
+
 	// 选择日志模式：
 	switch cfg.Server.Mode {
 	case bootstrap.ModeDev:
 		gin.SetMode(gin.DebugMode)
+		log.Printf("gin logger mode: %s\n", bootstrap.ModeDev)
 	case bootstrap.ModeRelease:
 		gin.SetMode(gin.ReleaseMode)
+		log.Printf("gin logger mode: %s\n", bootstrap.ModeRelease)
 	default:
-		log.Printf("unknown logger mode: %s, defaulting to debug", cfg.Logger.Mode)
+		log.Printf("unknown logger mode: %s, defaulting to debug\n", cfg.Logger.Mode)
 		gin.SetMode(gin.DebugMode)
 	}
+	// 初始化 Gin
+	r := gin.New()
+	r.Use(gin.Recovery())
 
 	// 注册路由
 	router.Register(r, jwtManager, authStore,

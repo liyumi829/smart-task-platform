@@ -44,55 +44,83 @@ func (r *projectMemberRepository) CreateWithTx(ctx context.Context, tx *gorm.DB,
 
 // ProjectMemberSearchQuery 项目成员列表查询参数
 type ProjectMemberSearchQuery struct {
-	Page      int    // 页码
-	PageSize  int    // 每页数量
+	SearchQuery
 	ProjectID uint64 // 项目 ID
 	Role      string // 成员角色
 	Keyword   string // 关键词：用户名前缀匹配
 }
 
-// SearchProjectMembers 搜索项目成员
+type SearchProjectMemberResult = SearchResult[*model.ProjectMember]
+
+// SearchProjectMembers 搜索项目成员。
 // 支持：
 //  1. 按项目 ID 查询
 //  2. 按角色筛选
 //  3. 按用户名前缀查询
 //  4. 分页
-func (r *projectMemberRepository) SearchProjectMembers(ctx context.Context, query *ProjectMemberSearchQuery) ([]*model.ProjectMember, int64, error) {
+//  5. total 按需查询，避免每次 COUNT(*) 带来的性能开销
+//  6. hasMore 通过 Limit(pageSize + 1) 判断，不依赖 total
+func (r *projectMemberRepository) SearchProjectMembers(ctx context.Context, query *ProjectMemberSearchQuery) (*SearchProjectMemberResult, error) {
+	// 参数校验：ProjectID 必须有效。
 	if query == nil || query.ProjectID <= 0 {
-		return nil, 0, ErrProjectMemberQueryInvalid
+		return nil, ErrProjectMemberQueryInvalid
 	}
-	// 相信上层传入的参数
 
-	db := getDB(ctx, r.db, nil).
+	// 参数的矫正交给上层，这里只做必要兜底，避免非法分页导致异常 SQL。
+	if query.Page <= 0 || query.PageSize <= 0 {
+		return nil, ErrProjectMemberQueryInvalid
+	}
+
+	// 构建基础查询条件。
+	baseDB := getDB(ctx, r.db, nil).
 		Model(&model.ProjectMember{}).
-		Joins("LEFT JOIN users ON users.id = project_members.user_id").
-		Where("project_members.project_id = ?", query.ProjectID)
+		Where(model.ProjectMemberTableName+"."+model.ProjectMemberColumnProjectID+" = ?", query.ProjectID)
 
-	// 按角色筛选
+	// 按角色筛选。
 	if query.Role != "" {
-		db = db.Where("project_members.role = ?", query.Role)
+		baseDB = baseDB.Where(model.ProjectMemberTableName+"."+model.ProjectMemberColumnRole+" = ?", query.Role)
 	}
 
-	// 按用户名前缀匹配
+	// 按用户名前缀匹配。
+	// 只有需要按 username 查询时才 JOIN users，避免无意义 JOIN。
 	if query.Keyword != "" {
-		like := query.Keyword + "%"
-		db = db.Where("(users.username LIKE ?)", like)
+		baseDB = baseDB.
+			Joins("INNER JOIN "+model.UserTableName+" ON "+model.UserTableName+"."+model.UserColumnID+" = "+model.ProjectMemberTableName+"."+model.ProjectMemberColumnUserID).
+			Where(model.UserTableName+"."+model.UserColumnUsername+" LIKE ?", query.Keyword+"%")
 	}
 
-	// 统计总数
-	var total int64
-	if err := db.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-	if total <= 0 {
-		return []*model.ProjectMember{}, 0, nil
+	var totalPtr *int64
+
+	// total 按需查询：
+	// 通常首次进入、手动刷新、筛选条件变化时 NeedTotal=true；
+	// 普通翻页时 NeedTotal=false，避免重复 COUNT(*)。
+	if query.NeedTotal {
+		var total int64
+		if err := baseDB.Count(&total).Error; err != nil {
+			return nil, err
+		}
+
+		totalPtr = &total
+
+		// 如果总数为 0，直接返回空结果，避免继续查询列表。
+		if total == 0 {
+			return &SearchProjectMemberResult{
+				List:    []*model.ProjectMember{},
+				Total:   totalPtr,
+				HasMore: false,
+			}, nil
+		}
 	}
 
-	// 分页查询
+	// 计算分页偏移量。
 	offset := (query.Page - 1) * query.PageSize
-	projectMembers := make([]*model.ProjectMember, 0, query.PageSize)
 
-	// 角色排序：owner > admin > member
+	// 多查一条用于判断是否还有下一页。
+	limit := query.PageSize + 1
+
+	projectMembers := make([]*model.ProjectMember, 0, limit)
+
+	// 角色排序：owner > admin > member。
 	roleOrder := fmt.Sprintf(
 		"FIELD(%s.%s, '%s', '%s', '%s')",
 		model.ProjectMemberTableName,
@@ -102,18 +130,30 @@ func (r *projectMemberRepository) SearchProjectMembers(ctx context.Context, quer
 		model.ProjectMemberRoleMember,
 	)
 
-	err := db.
-		Preload(model.ProjectMemberAssocUser).
+	if err := baseDB.
+		// JOIN users 时只查询 project_members 字段，避免 users 同名字段影响扫描结果。
+		Select(model.ProjectMemberTableName+".*").
+		Preload(model.ProjectMemberAssocUser, SelectUserFields).
 		Order(roleOrder).
 		Order(model.ProjectMemberTableName + "." + model.ProjectMemberColumnJoinedAt + " DESC").
+		Order(model.ProjectMemberTableName + "." + model.ProjectMemberColumnID + " DESC"). // 排序兜底，保证分页稳定。
 		Offset(offset).
-		Limit(query.PageSize).
-		Find(&projectMembers).Error
-	if err != nil {
-		return nil, 0, err
+		Limit(limit).
+		Find(&projectMembers).Error; err != nil {
+		return nil, err
 	}
 
-	return projectMembers, total, nil
+	// 通过多查的一条数据判断 hasMore，不依赖 total。
+	hasMore := len(projectMembers) > query.PageSize
+	if hasMore {
+		projectMembers = projectMembers[:query.PageSize]
+	}
+
+	return &SearchProjectMemberResult{
+		List:    projectMembers,
+		Total:   totalPtr,
+		HasMore: hasMore,
+	}, nil
 }
 
 // UpdateProjectMemberRole 更新指定项目成员角色
@@ -278,7 +318,7 @@ func (r *projectMemberRepository) GetProjectMemberByProjectIDAndUserID(ctx conte
 
 	var projectMember model.ProjectMember
 	err := getDB(ctx, r.db, nil).
-		Preload(model.ProjectMemberAssocUser).
+		Preload(model.ProjectMemberAssocUser, SelectUserFields).
 		Where(model.ProjectMemberColumnProjectID+" = ?", projectID).
 		Where(model.ProjectMemberColumnUserID+" = ?", userID).
 		First(&projectMember).Error
@@ -295,18 +335,23 @@ func (r *projectMemberRepository) GetProjectMemberByProjectIDAndUserID(ctx conte
 // ExistsByProjectIDAndUserID 判断用户是否为项目成员
 // 上层在做权限前置校验时会经常用到
 func (r *projectMemberRepository) ExistsByProjectIDAndUserID(ctx context.Context, projectID, userID uint64) (bool, error) {
-	var count int64
+	var id uint64
+
 	err := getDB(ctx, r.db, nil).
 		Model(&model.ProjectMember{}).
+		Select(model.ProjectMemberColumnID).
 		Where(model.ProjectMemberColumnProjectID+" = ?", projectID).
 		Where(model.ProjectMemberColumnUserID+" = ?", userID).
 		Limit(1).
-		Count(&count).Error
+		Take(&id).Error
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
 		return false, err
 	}
 
-	return count > 0, nil
+	return true, nil
 }
 
 // ListProjectIDsByUserID 根据用户ID查询该用户相关的所有项目ID

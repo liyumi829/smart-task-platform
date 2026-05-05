@@ -39,7 +39,7 @@ type UserPublicProfileResp struct {
 // UserSearchListQuery 用户搜索查询查询请求
 type UserSearchListQuery struct {
 	PageQuery
-	Keyword string `form:"keyword" binding:"required,max=16"` // 搜索关键词
+	Keyword string `form:"keyword" binding:"omitempty"` // 搜索关键词
 }
 
 // UserListItem 用户搜索列表项

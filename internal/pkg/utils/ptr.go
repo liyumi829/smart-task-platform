@@ -15,8 +15,13 @@ func SafeStringValue(value *string) string {
 	return *value
 }
 
-// StringPtr 返回字符串指针（Go 规范大驼峰命名）
+// StringPtr 返回字符串指针
 func StringPtr(v string) *string {
+	return &v
+}
+
+// Int64Ptr 返回Int64指针
+func Int64Ptr(v int64) *int64 {
 	return &v
 }
 
@@ -32,4 +37,13 @@ func SafeValue[T any](val *T) T {
 		return zero
 	}
 	return *val
+}
+
+// SafePtrClone 安全克隆指针的值，如果nil，则返回nil
+func SafePtrClone[T any](val *T) *T {
+	if val == nil {
+		return nil
+	}
+	v := *val
+	return &v
 }

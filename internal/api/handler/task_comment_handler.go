@@ -5,6 +5,7 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"smart-task-platform/internal/api/contextx"
 	"smart-task-platform/internal/dto"
@@ -125,6 +126,20 @@ func (h *TaskCommentHandler) CreateTaskComment(c *gin.Context) {
 			logger.Warn("create task comment rejected: invalid parent comment")
 			response.Fail(c, errmsg.InvalidParentComment)
 
+		// 客户端主动断开或请求被取消，压测时常见，不作为服务端错误
+		case errors.Is(err, context.Canceled):
+			logger.Warn("create task comment canceled",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.ClientNotFound)
+
+		// 请求超时，需要重点关注
+		case errors.Is(err, context.DeadlineExceeded):
+			logger.Error("create task comment deadline exceeded",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.TooManyRequest)
+
 		// 其它错误
 		default:
 			logger.Error("create task comment failed", zap.Error(err))
@@ -184,6 +199,7 @@ func (h *TaskCommentHandler) ListTaskComments(c *gin.Context) {
 		TaskID:    taskID,
 		Page:      page,
 		PageSize:  pageSize,
+		NeedTotal: query.NeedTotal,
 	})
 
 	// 错误识别
@@ -203,6 +219,20 @@ func (h *TaskCommentHandler) ListTaskComments(c *gin.Context) {
 		case errors.Is(err, service.ErrTaskForbidden):
 			logger.Warn("list task comments rejected: task forbidden")
 			response.Fail(c, errmsg.TaskNoPermission)
+
+		// 客户端主动断开或请求被取消，压测时常见，不作为服务端错误
+		case errors.Is(err, context.Canceled):
+			logger.Warn("list task comments canceled",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.ClientNotFound)
+
+		// 请求超时，需要重点关注
+		case errors.Is(err, context.DeadlineExceeded):
+			logger.Error("list task comments deadline exceeded",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.TooManyRequest)
 
 		// 其它错误
 		default:
@@ -281,6 +311,20 @@ func (h *TaskCommentHandler) RemoveTaskComment(c *gin.Context) {
 		case errors.Is(err, service.ErrProjectMemberNotFound):
 			logger.Warn("remove task comment failed: project member not found or no permission")
 			response.Fail(c, errmsg.TaskCommentNoPermission)
+
+		// 客户端主动断开或请求被取消，压测时常见，不作为服务端错误
+		case errors.Is(err, context.Canceled):
+			logger.Warn("remove task comment canceled",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.ClientNotFound)
+
+		// 请求超时，需要重点关注
+		case errors.Is(err, context.DeadlineExceeded):
+			logger.Error("remove task comment deadline exceeded",
+				zap.Error(err),
+			)
+			response.Fail(c, errmsg.TooManyRequest)
 
 		// 其它错误
 		default:

@@ -6,8 +6,8 @@ package repository
 import (
 	"context"
 	"errors"
-	"fmt"
 	"smart-task-platform/internal/model"
+	"smart-task-platform/internal/pkg/utils"
 	"time"
 
 	"gorm.io/gorm"
@@ -63,7 +63,7 @@ func (r *projectRepository) GetByID(ctx context.Context, id uint64) (*model.Proj
 func (r *projectRepository) GetDetailByID(ctx context.Context, id uint64) (*model.Project, error) {
 	var project model.Project
 	err := getDB(ctx, r.db, nil).
-		Preload(model.ProjectAssocOwner).
+		Preload(model.ProjectAssocOwner, SelectUserFields).
 		Where(model.ProjectColumnID+" = ?", id).
 		First(&project).Error
 	if err != nil {
@@ -135,82 +135,145 @@ func (r *projectRepository) ArchiveProjectWithTx(ctx context.Context, tx *gorm.D
 		}).Error
 }
 
-// ProjectSearchQuery 项目列表查询参数
+// ProjectSearchQuery 项目列表查询参数。
 type ProjectSearchQuery struct {
-	Page       int      // 页码
-	PageSize   int      // 每页数量
+	SearchQuery
 	Status     string   // 项目状态
 	Keyword    string   // 关键词
 	ProjectIDs []uint64 // 当前用户可见的项目 ID 列表
 }
 
-// SearchProjects 获取当前用户可见项目列表
-// 说明：要求 model.Project 中存在 Owner 关联字段
-func (r *projectRepository) SearchProjects(ctx context.Context, query *ProjectSearchQuery) ([]*model.Project, int64, error) {
+type SearchProjectResult = SearchResult[*model.Project]
+
+// SearchProjects 获取当前用户可见项目列表。
+// 说明：
+// 1. 只查询当前用户可见的项目
+// 2. 支持按状态筛选
+// 3. 支持按项目名称前缀匹配
+// 4. total 按需查询，避免每次 COUNT(*) 带来的性能开销
+// 5. hasMore 通过 Limit(pageSize + 1) 判断，不依赖 total
+// 6. 要求 model.Project 中存在 Owner 关联字段
+func (r *projectRepository) SearchProjects(ctx context.Context, query *ProjectSearchQuery) (*SearchProjectResult, error) {
 	if query == nil {
-		return nil, 0, ErrProjectQueryInvalid
+		return nil, ErrProjectQueryInvalid
 	}
-	// 参数的矫正交给上层，这里完全相信上层
 
-	// 无可见项目时直接返回空列表，避免执行无意义 SQL
+	// 参数的矫正交给上层，这里只做必要的兜底，避免非法分页导致 SQL 异常。
+	if query.Page <= 0 || query.PageSize <= 0 {
+		return nil, ErrProjectQueryInvalid
+	}
+
+	// 无可见项目时直接返回空列表，避免执行无意义 SQL。
 	if len(query.ProjectIDs) == 0 {
-		return []*model.Project{}, 0, nil
+		var totalPtr *int64
+
+		// NeedTotal=true 时，返回明确的 total=0。
+		if query.NeedTotal {
+			totalPtr = utils.Int64Ptr(0)
+		}
+
+		return &SearchProjectResult{
+			List:    []*model.Project{},
+			Total:   totalPtr,
+			HasMore: false,
+		}, nil
 	}
 
-	db := getDB(ctx, r.db, nil).
+	// 构建基础查询条件。
+	baseDB := getDB(ctx, r.db, nil).
 		Model(&model.Project{}).
-		Where(fmt.Sprintf("%s IN ?", model.ProjectColumnID), query.ProjectIDs)
+		Where(model.ProjectColumnID+" IN ?", query.ProjectIDs)
 
-	// 按状态筛选
+	// 按状态筛选。
 	if query.Status != "" {
-		db = db.Where(model.ProjectColumnStatus+" = ?", query.Status) // 如果状态不为空，就新增筛选
+		baseDB = baseDB.Where(model.ProjectColumnStatus+" = ?", query.Status)
 	}
 
-	// 按关键词前缀匹配
+	// 按项目名称前缀匹配。
 	if query.Keyword != "" {
-		likePattern := query.Keyword + "%"
-		db = db.Where(model.ProjectColumnName+" LIKE ?", likePattern)
-	}
-	// 没有关键词就找当前可用查找的全量
-
-	// 统计总数
-	var total int64
-	if err := db.Count(&total).Error; err != nil {
-		return nil, 0, err
-	}
-	if total == 0 {
-		return []*model.Project{}, 0, nil
+		baseDB = baseDB.Where(model.ProjectColumnName+" LIKE ?", query.Keyword+"%")
 	}
 
-	// 分页查询
+	var totalPtr *int64
+
+	// total 按需查询：
+	// 通常首次进入、手动刷新、筛选条件变化时 NeedTotal=true；
+	// 普通翻页时 NeedTotal=false，避免重复 COUNT(*)。
+	if query.NeedTotal {
+		var total int64
+		if err := baseDB.Count(&total).Error; err != nil {
+			return nil, err
+		}
+		totalPtr = &total
+		// 如果总数为 0，直接返回空结果，避免继续查询列表。
+		if total == 0 {
+			return &SearchProjectResult{
+				List:    []*model.Project{},
+				Total:   totalPtr,
+				HasMore: false,
+			}, nil
+		}
+	}
+
+	// 计算分页偏移量。
 	offset := (query.Page - 1) * query.PageSize
-	projects := make([]*model.Project, 0, query.PageSize)
 
-	err := db.
-		Preload(model.ProjectAssocOwner).
-		Order(model.ProjectColumnCreatedAt + " DESC"). // 按照创建时间排序
-		Order(model.ProjectColumnName + " ASC").       // 创建时间相同按照项目名称排序
+	// 多查一条用于判断是否还有下一页。
+	limit := query.PageSize + 1
+
+	projects := make([]*model.Project, 0, limit)
+
+	if err := baseDB.
+		Preload(model.ProjectAssocOwner, SelectUserFields).
+		Select([]string{
+			model.ProjectColumnID,
+			model.ProjectColumnName,
+			model.ProjectColumnStatus,
+			model.ProjectColumnStartDate,
+			model.ProjectColumnEndDate,
+			model.ProjectColumnOwnerID,
+		}).
+		Order(model.ProjectColumnCreatedAt + " DESC"). // 按创建时间倒序。
+		Order(model.ProjectColumnName + " ASC").       // 创建时间相同时按项目名称正序。
+		Order(model.ProjectColumnID + " DESC").        // 排序兜底，保证结果稳定。
 		Offset(offset).
-		Limit(query.PageSize).
-		Find(&projects).Error
-	if err != nil {
-		return nil, 0, err
+		Limit(limit).
+		Find(&projects).Error; err != nil {
+		return nil, err
 	}
 
-	return projects, total, nil
+	// 通过多查的一条数据判断 hasMore，不依赖 total。
+	hasMore := len(projects) > query.PageSize
+	if hasMore {
+		projects = projects[:query.PageSize]
+	}
+
+	return &SearchProjectResult{
+		List:    projects,
+		Total:   totalPtr,
+		HasMore: hasMore,
+	}, nil
 }
 
 // ExistsByProjectID 根据项目ID判断项目是否存在
 func (r *projectRepository) ExistsByProjectID(ctx context.Context, projectID uint64) (bool, error) {
-	var count int64
+	if projectID == 0 {
+		return false, ErrProjectQueryInvalid
+	}
+
+	var id int64
 	err := getDB(ctx, r.db, nil).
 		Model(&model.Project{}).
+		Select(model.ProjectColumnID).
 		Where(model.ProjectColumnID+" = ?", projectID).
 		Limit(1).
-		Count(&count).Error
+		Take(&id).Error
 	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return false, nil
+		}
 		return false, err
 	}
 
-	return count > 0, nil
+	return true, nil
 }
