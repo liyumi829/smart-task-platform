@@ -40,6 +40,7 @@ var (
 	ErrEmptyProjectMemberRole     = errors.New("project member role cannot be empty") // 项目成员角色不能为空
 	ErrProjectMemberAlreadyExists = errors.New("project member already exists")       // 项目成员已存在
 	ErrExceedsAdminMemberLimit    = errors.New("admin member limit exceeded")         // 管理员人数已达上限
+	ErrModifiedUserNotFound       = errors.New("modified member not found")           // 被修改用户不存在
 
 	ErrTaskNotFound             = errors.New("task not found")                  // 任务没有找到
 	ErrInvalidTaskParam         = errors.New("invalid task parameter")          // 不符合的任务参数

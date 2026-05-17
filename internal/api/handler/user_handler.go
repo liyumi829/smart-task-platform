@@ -269,7 +269,7 @@ func (h *UserHandler) ListUsers(c *gin.Context) {
 	resp, err := h.userService.ListUsers(c.Request.Context(), &service.ListUserParam{
 		Page:      query.Page,
 		PageSize:  query.PageSize,
-		KeyWord:   query.Keyword,
+		Keyword:   query.Keyword,
 		NeedTotal: query.NeedTotal,
 	})
 	if err != nil {

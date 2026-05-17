@@ -11,26 +11,46 @@ import (
 	"smart-task-platform/internal/pkg/utils"
 	"smart-task-platform/internal/pkg/validator"
 	"smart-task-platform/internal/repository"
+	cacheObj "smart-task-platform/internal/service/cachesvc/cacheobj"
 	"strings"
 
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
+// userSvcUserRepo 用户服务使用的仓储操作
+type userSvcUserRepo interface {
+	GetDetailByID(ctx context.Context, id uint64) (*model.User, error)                                             // 获取用户
+	UpdateUserProfileWithTx(ctx context.Context, tx *gorm.DB, userID uint64, nickname string, avatar string) error // 更新个人资料
+	UpdateUserPasswordWithTx(ctx context.Context, tx *gorm.DB, userID uint64, password string) error               // 更新密码
+	SearchUsers(ctx context.Context, query *repository.UserSearchQuery) (*repository.UserSearchResult, error)
+}
+
+// cacheUserInvoker
+type cacheUserInvoker interface {
+	GetUserBriefInfo(ctx context.Context, userID uint64) (*model.User, bool, error)
+	GetUserList(ctx context.Context, query *cacheObj.UserListQuery) ([]*model.User, *int64, bool, error)
+	DeleteUserBriefInfoCache(ctx context.Context, userID uint64) error
+	BumpUserListPage(ctx context.Context) error
+}
+
 // UserService 用户服务
 type UserService struct {
 	txMgr *repository.TxManager // 事务管理器
 	ur    userSvcUserRepo       // 用户仓库接口
+	store cacheUserInvoker
 }
 
 // NewAuthService 创建用户服务
 func NewUserService(
 	txMgr *repository.TxManager,
 	userRepo userSvcUserRepo,
+	store cacheUserInvoker,
 ) *UserService {
 	return &UserService{
 		txMgr: txMgr,
 		ur:    userRepo,
+		store: store,
 	}
 }
 
@@ -48,7 +68,7 @@ func (s *UserService) UpdateUserProfile(ctx context.Context, userID uint64, nick
 	}
 
 	// 先搜索获取用户信息
-	user, err := s.ur.GetByID(ctx, userID)
+	user, err := s.ur.GetDetailByID(ctx, userID)
 	if err != nil {
 		if errors.Is(err, repository.ErrUserNotFound) {
 			zap.L().Warn("user not found when updating profile",
@@ -73,8 +93,22 @@ func (s *UserService) UpdateUserProfile(ctx context.Context, userID uint64, nick
 	// 先检验参数是否为空
 	if nickname == "" && avatar == "" {
 		zap.L().Info("skip update user profile because nickname and avatar are both empty",
-			zap.Uint64("user_id", userID),
-		)
+			zap.Uint64("user_id", userID))
+
+		// 如果两个参数都为空，那么就不用修改，直接返回即可
+		return &dto.UpdateProfileResp{
+			ID:       user.ID,
+			Username: user.Username,
+			Nickname: user.Nickname,
+			Avatar:   user.Avatar,
+		}, nil
+	}
+	// 再检查，如果新名称和头像和原来一样，那么就直接返回，不执行sql
+	isSameNickname := user.Nickname == nickname
+	isSameAvatar := user.Avatar == avatar
+	if isSameNickname && isSameAvatar {
+		zap.L().Info("skip update user profile because new nickname and avatar are both same as old",
+			zap.Uint64("user_id", userID))
 
 		// 如果两个参数都为空，那么就不用修改，直接返回即可
 		return &dto.UpdateProfileResp{
@@ -97,22 +131,7 @@ func (s *UserService) UpdateUserProfile(ctx context.Context, userID uint64, nick
 
 	// 使用事务更新用户个人资料
 	err = s.txMgr.Transaction(ctx, func(tx *gorm.DB) error {
-		if err := s.ur.UpdateUserProfileWithTx(
-			ctx,
-			tx,
-			userID,
-			newNickname,
-			newAvatar,
-		); err != nil {
-			zap.L().Error("fail to update user profile with tx",
-				zap.Uint64("user_id", userID),
-				zap.String("nickname", nickname),
-				zap.String("avatar", avatar),
-				zap.Error(err),
-			)
-			return err
-		}
-		return nil
+		return s.ur.UpdateUserProfileWithTx(ctx, tx, userID, newNickname, newAvatar)
 	})
 	if err != nil {
 		zap.L().Error("fail to update user profile",
@@ -122,6 +141,8 @@ func (s *UserService) UpdateUserProfile(ctx context.Context, userID uint64, nick
 			zap.Error(err))
 		return nil, err
 	}
+	s.store.DeleteUserBriefInfoCache(ctx, userID)
+	s.store.BumpUserListPage(ctx) // 一般来说不要修改，但是我们假设按照昵称修改会影响表项
 
 	zap.L().Info("user profile updated successfully",
 		zap.Uint64("user_id", userID),
@@ -148,7 +169,7 @@ func (s *UserService) UpdateUserPassword(ctx context.Context, userID uint64, old
 	}
 
 	// 获取用户信息
-	user, err := s.ur.GetByID(ctx, userID) // 获取到用户信息
+	user, err := s.ur.GetDetailByID(ctx, userID) // 获取到用户信息
 	if err != nil {
 		if errors.Is(err, repository.ErrUserNotFound) {
 			zap.L().Warn("user not found when updating password",
@@ -227,19 +248,17 @@ func (s *UserService) UpdateUserPassword(ctx context.Context, userID uint64, old
 // GetUserPublicInfo 获取用户公开信息
 func (s *UserService) GetUserPublicInfo(ctx context.Context, targetUserID uint64) (*dto.UserPublicProfileResp, error) {
 	// 获取用户信息
-	user, err := s.ur.GetByID(ctx, targetUserID) // 获取到用户信息
-	if err != nil {
-		if errors.Is(err, repository.ErrUserNotFound) {
-			zap.L().Warn("user not found when getting public user info",
-				zap.Uint64("target_user_id", targetUserID),
-			)
-			return nil, ErrUserNotFound
-		}
+	user, exists, err := s.store.GetUserBriefInfo(ctx, targetUserID) // 获取到用户信息
+	if err != nil && !errors.Is(err, repository.ErrUserNotFound) {
 		zap.L().Error("fail to get user by id when getting public user info",
 			zap.Uint64("target_user_id", targetUserID),
-			zap.Error(err),
-		)
+			zap.Error(err))
 		return nil, err
+	}
+	if !exists {
+		zap.L().Warn("user not found when getting public user info",
+			zap.Uint64("target_user_id", targetUserID))
+		return nil, ErrUserNotFound
 	}
 
 	zap.L().Info("get user public info successfully",
@@ -260,14 +279,14 @@ func (s *UserService) GetUserPublicInfo(ctx context.Context, targetUserID uint64
 type ListUserParam struct {
 	Page      int
 	PageSize  int
-	KeyWord   string
+	Keyword   string
 	NeedTotal bool
 }
 
 // ListUsers 用户搜索列表（分页）
 func (s *UserService) ListUsers(ctx context.Context, param *ListUserParam) (*dto.UserSearchListResp, error) {
 	// 参数检查。
-	keyword := strings.TrimSpace(param.KeyWord) // 清理关键字空格
+	keyword := strings.TrimSpace(param.Keyword) // 清理关键字空格
 	var page, pageSize int
 	if keyword == "" {
 		page, pageSize = fixPageParams(param.Page, param.PageSize)
@@ -287,13 +306,11 @@ func (s *UserService) ListUsers(ctx context.Context, param *ListUserParam) (*dto
 
 	// 参数校验完成
 	// 开始搜索用户
-	result, err := s.ur.SearchUsers(ctx, &repository.UserSearchQuery{
-		Keyword: keyword,
-		SearchQuery: repository.SearchQuery{
-			Page:      page,
-			PageSize:  pageSize,
-			NeedTotal: param.NeedTotal,
-		},
+	list, total, hasMore, err := s.store.GetUserList(ctx, &cacheObj.UserListQuery{
+		Page:      page,
+		PageSize:  pageSize,
+		NeedTotal: param.NeedTotal,
+		Keyword:   keyword,
 	})
 	// 差错处理
 	if err != nil {
@@ -302,13 +319,12 @@ func (s *UserService) ListUsers(ctx context.Context, param *ListUserParam) (*dto
 			zap.String("keyword", keyword),
 			zap.Int("page", page),
 			zap.Int("page_size", pageSize),
-			zap.Error(err),
-		)
+			zap.Error(err))
 		return nil, err
 	}
 
-	userItems := make([]*dto.UserListItem, 0, len(result.List))
-	for _, user := range result.List {
+	userItems := make([]*dto.UserListItem, 0, len(list))
+	for _, user := range list {
 		if user == nil {
 			continue
 		}
@@ -325,22 +341,14 @@ func (s *UserService) ListUsers(ctx context.Context, param *ListUserParam) (*dto
 		zap.String("keyword", keyword),
 		zap.Int("page", page),
 		zap.Int("page_size", len(userItems)),
-		zap.Bool("has_more", result.HasMore),
+		zap.Bool("has_more", hasMore),
 	)
 
 	return &dto.UserSearchListResp{
 		List:     userItems,
-		Total:    utils.SafePtrClone(result.Total),
+		Total:    utils.SafePtrClone(total),
 		Page:     page,
 		PageSize: pageSize,
-		HasMore:  result.HasMore,
+		HasMore:  hasMore,
 	}, nil
-}
-
-// userSvcUserRepo 用户服务使用的仓储操作
-type userSvcUserRepo interface {
-	GetByID(ctx context.Context, id uint64) (*model.User, error)                                                   // 获取用户
-	UpdateUserProfileWithTx(ctx context.Context, tx *gorm.DB, userID uint64, nickname string, avatar string) error // 更新个人资料
-	UpdateUserPasswordWithTx(ctx context.Context, tx *gorm.DB, userID uint64, password string) error               // 更新密码
-	SearchUsers(ctx context.Context, query *repository.UserSearchQuery) (*repository.SearchUserResult, error)
 }

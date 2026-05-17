@@ -40,11 +40,12 @@ func (r *projectRepository) CreateWithTx(ctx context.Context, tx *gorm.DB, proje
 		Create(project).Error // 执行事务
 }
 
-// GetByID 根据项目ID获取项目详情
+// GetByID 根据项目ID获取项目部分信息
 func (r *projectRepository) GetByID(ctx context.Context, id uint64) (*model.Project, error) {
 	var project model.Project
 	// 查找
 	err := getDB(ctx, r.db, nil).
+		Select(getProjectSelectColumns()).
 		Where(model.ProjectColumnID+" = ?", id).
 		First(&project).Error
 
@@ -57,6 +58,24 @@ func (r *projectRepository) GetByID(ctx context.Context, id uint64) (*model.Proj
 	return &project, nil
 }
 
+// BatchGetProjectsByIDs 根据项目ID获取
+func (r *projectRepository) BatchGetProjectsByIDs(ctx context.Context, projectIDs []uint64) ([]*model.Project, error) {
+	if len(projectIDs) == 0 {
+		return []*model.Project{}, nil
+	}
+	var projects []*model.Project
+	// 查找
+	err := getDB(ctx, r.db, nil).
+		Model(&model.Project{}).
+		Select(getProjectSelectColumns()).
+		Where(model.ProjectColumnID+" IN ?", projectIDs).
+		Find(&projects).Error
+	if err != nil {
+		return nil, err
+	}
+	return projects, nil
+}
+
 // GetDetailByID 根据项目 ID 获取项目详情（预加载 owner）
 //
 // 说明：要求 model.Project 中存在 Owner 关联字段
@@ -64,6 +83,7 @@ func (r *projectRepository) GetDetailByID(ctx context.Context, id uint64) (*mode
 	var project model.Project
 	err := getDB(ctx, r.db, nil).
 		Preload(model.ProjectAssocOwner, SelectUserFields).
+		Model(&model.Project{}).
 		Where(model.ProjectColumnID+" = ?", id).
 		First(&project).Error
 	if err != nil {
@@ -121,6 +141,19 @@ func (r *projectRepository) UpdateProjectInformationWithTx(ctx context.Context, 
 	return getDB(ctx, r.db, tx).
 		Model(&model.Project{}).
 		Where(model.ProjectColumnID+" = ?", id).
+		Updates(updates).Error
+}
+
+// UpdateProjectOwnerWithTx 根据项目 ID 更新项目拥有者
+func (r *projectRepository) UpdateProjectOwnerWithTx(ctx context.Context, tx *gorm.DB, projectID uint64, ownerID uint64) error {
+	updates := map[string]interface{}{
+		model.ProjectColumnOwnerID:   ownerID,
+		model.ProjectColumnUpdatedAt: time.Now(),
+	}
+
+	return getDB(ctx, r.db, tx).
+		Model(&model.Project{}).
+		Where(model.ProjectColumnID+" = ?", projectID).
 		Updates(updates).Error
 }
 

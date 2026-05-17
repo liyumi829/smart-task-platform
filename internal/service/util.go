@@ -192,7 +192,7 @@ func buildTaskCommentBaseFields(comment *model.TaskComment) *dto.TaskCommentBase
 
 // ProjectMemberFinder  项目成员角色等级查询接口
 type ProjectMemberFinder interface {
-	GetProjectMemberByProjectIDAndUserID(ctx context.Context, projectID, userID uint64) (*model.ProjectMember, error)
+	GetProjectMemberRole(ctx context.Context, projectID, userID uint64) (string, bool, error)
 }
 
 // getProjectMemberRoleLevel 获取项目成员角色和角色权限等级
@@ -211,16 +211,8 @@ func getProjectMemberRoleLevel(
 	logger *zap.Logger,
 ) (string, int, error) {
 	// 查询用户在项目中的成员信息
-	member, err := invoker.GetProjectMemberByProjectIDAndUserID(ctx, projectID, userID)
-	if err != nil {
-		if errors.Is(err, repository.ErrProjectMemberNotFound) {
-			logger.Warn("project member role level check failed: project member not found",
-				zap.Uint64("project_id", projectID),
-				zap.Uint64("user_id", userID),
-			)
-			return "", 0, ErrProjectMemberNotFound
-		}
-
+	role, exists, err := invoker.GetProjectMemberRole(ctx, projectID, userID)
+	if err != nil && !errors.Is(err, repository.ErrProjectMemberNotFound) {
 		logger.Error("project member role level check failed: get project member error",
 			zap.Uint64("project_id", projectID),
 			zap.Uint64("user_id", userID),
@@ -228,24 +220,31 @@ func getProjectMemberRoleLevel(
 		)
 		return "", 0, err
 	}
+	if !exists {
+		logger.Warn("project member role level check failed: project member not found",
+			zap.Uint64("project_id", projectID),
+			zap.Uint64("user_id", userID))
+
+		return "", 0, ErrProjectMemberNotFound
+	}
 
 	// 根据角色获取权限等级
-	level, ok := model.RoleLevel[member.Role]
+	level, ok := model.RoleLevel[role]
 	if !ok {
 		logger.Error("project member role level check failed: invalid member role",
 			zap.Uint64("project_id", projectID),
 			zap.Uint64("user_id", userID),
-			zap.String("member_role", member.Role),
+			zap.String("member_role", role),
 		)
 		return "", 0, ErrInvalidProjectMemberRole
 	}
 
-	return member.Role, level, nil
+	return role, level, nil
 }
 
 // ProjectRoleChecker  项目成员角色查询接口
 type ProjectRoleChecker interface {
-	GetProjectMemberRoleByProjectIDAndUserID(ctx context.Context, projectID, userID uint64) (string, error)
+	GetProjectMemberRole(ctx context.Context, projectID, userID uint64) (string, bool, error)
 }
 
 // hasProjectManagePermission 判断用户在项目中是否具有管理权限
@@ -262,16 +261,9 @@ func hasProjectManagePermission(
 	logger *zap.Logger,
 ) (bool, error) {
 	// 查询用户在项目中的角色
-	role, err := invoker.GetProjectMemberRoleByProjectIDAndUserID(ctx, projectID, userID)
-	if err != nil {
-		if errors.Is(err, repository.ErrProjectMemberNotFound) {
-			logger.Warn("project manage permission check failed: project member not found",
-				zap.Uint64("project_id", projectID),
-				zap.Uint64("user_id", userID),
-			)
-			return false, ErrProjectMemberNotFound
-		}
-
+	role, exists, err := invoker.GetProjectMemberRole(ctx, projectID, userID)
+	// 出现错误
+	if err != nil && !errors.Is(err, repository.ErrProjectMemberNotFound) {
 		logger.Error("project manage permission check failed: get project member role error",
 			zap.Uint64("project_id", projectID),
 			zap.Uint64("user_id", userID),
@@ -279,7 +271,14 @@ func hasProjectManagePermission(
 		)
 		return false, err
 	}
-
+	// 如果不存在
+	if !exists {
+		logger.Warn("project manage permission check failed: project member not found",
+			zap.Uint64("project_id", projectID),
+			zap.Uint64("user_id", userID),
+		)
+		return false, ErrProjectMemberNotFound
+	}
 	// 判断角色是否具有项目管理权限
 	if role == model.ProjectMemberRoleAdmin || role == model.ProjectMemberRoleOwner {
 		logger.Debug("project manage permission check success: permission granted",
@@ -289,39 +288,31 @@ func hasProjectManagePermission(
 		)
 		return true, nil
 	}
-
 	logger.Warn("project manage permission check failed: permission denied",
 		zap.Uint64("project_id", projectID),
 		zap.Uint64("user_id", userID),
 		zap.String("member_role", role),
 	)
-
 	return false, nil
 }
 
-// taskGetInvoker 任务获取接口
-type TaskFinder interface {
-	GetTaskByID(ctx context.Context, taskID uint64) (*model.Task, error)
-}
-
-// ProjectMemberChecker  判断是否是项目成员接口
-type ProjectMemberChecker interface {
-	ExistsByProjectIDAndUserID(ctx context.Context, projectID, userID uint64) (bool, error)
+type taskCommentPermissionChecker interface {
+	GetTaskPermissionInfo(ctx context.Context, taskID uint64) (*model.Task, bool, error)
+	IsProjectMember(ctx context.Context, projectID, userID uint64) (bool, error)
 }
 
 // validateTaskCommentAccess 校验任务是否属于项目，并校验用户是否为项目成员
 func validateTaskCommentAccess(
 	ctx context.Context,
-	pmr ProjectMemberChecker,
-	tr TaskFinder,
+	invoker taskCommentPermissionChecker,
 	projectID uint64,
 	taskID uint64,
 	userID uint64,
 	logger *zap.Logger,
 ) (*model.Task, error) {
 	// 查询任务，拿到任务真实所属项目
-	task, err := tr.GetTaskByID(ctx, taskID)
-	if err != nil {
+	task, exists, err := invoker.GetTaskPermissionInfo(ctx, taskID)
+	if err != nil && !errors.Is(err, repository.ErrTaskNotFound) {
 		logger.Error("task comment access check failed: get task error",
 			zap.Uint64("project_id", projectID),
 			zap.Uint64("task_id", taskID),
@@ -331,8 +322,8 @@ func validateTaskCommentAccess(
 		return nil, err
 	}
 
-	// 校验路径中的 projectID 是否和任务真实 projectID 一致
-	if task.ProjectID != projectID {
+	// 验证是否存 + 校验路径中的 projectID 是否和任务真实 projectID 一致
+	if !exists || task.ProjectID != projectID {
 		logger.Warn("task comment access check failed: task does not belong to project",
 			zap.Uint64("path_project_id", projectID),
 			zap.Uint64("task_project_id", task.ProjectID),
@@ -343,8 +334,8 @@ func validateTaskCommentAccess(
 	}
 
 	// 判断用户是否是项目成员
-	ok, err := pmr.ExistsByProjectIDAndUserID(ctx, projectID, userID)
-	if err != nil {
+	isMember, err := invoker.IsProjectMember(ctx, projectID, userID)
+	if err != nil && !errors.Is(err, repository.ErrProjectMemberNotFound) {
 		logger.Error("task comment access check failed: check project member error",
 			zap.Uint64("project_id", projectID),
 			zap.Uint64("task_id", taskID),
@@ -354,7 +345,7 @@ func validateTaskCommentAccess(
 		return nil, err
 	}
 
-	if !ok {
+	if !isMember {
 		logger.Warn("task comment access check failed: project member not found",
 			zap.Uint64("project_id", projectID),
 			zap.Uint64("task_id", taskID),

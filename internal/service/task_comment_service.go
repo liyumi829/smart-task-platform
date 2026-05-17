@@ -16,29 +16,43 @@ import (
 	"gorm.io/gorm"
 )
 
+// taskCommentSVCCommentRepo 评论服务依赖的评论仓储能力
+type taskCommentSVCCommentRepo interface {
+	CreateCommentWithTx(ctx context.Context, tx *gorm.DB, comment *model.TaskComment) error
+	SearchComments(ctx context.Context, query *repository.SearchTaskCommentsQuery) (*repository.SearchTaskCommentResult, error)
+	SoftDeleteCommentWithTx(ctx context.Context, tx *gorm.DB, commentID uint64) error
+
+	GetDetailByID(ctx context.Context, commentID uint64) (*model.TaskComment, error)
+	GetTaskCommentDeleteStatusByIDs(ctx context.Context, ids []uint64) ([]*model.TaskComment, error)
+}
+
+// cacheTaskCommentInvoker
+type cacheTaskCommentInvoker interface {
+	GetUserBriefInfo(ctx context.Context, userID uint64) (*model.User, bool, error)
+
+	IsProjectMember(ctx context.Context, projectID, userID uint64) (bool, error)
+	GetProjectMemberRole(ctx context.Context, projectID, userID uint64) (string, bool, error)
+
+	GetTaskPermissionInfo(ctx context.Context, taskID uint64) (*model.Task, bool, error)
+}
+
 // TaskCommentService 任务评论服务
 type TaskCommentService struct {
-	txMgr *repository.TxManager           // 事务管理器
-	ur    taskCommentSvcUserRepo          // 用户仓储接口
-	pmr   taskCommentSVCProjectMemberRepo // 项目成员仓储接口
-	tr    taskCommentSVCTaskRepo          // 任务仓储接口
-	tcr   taskCommentSVCCommentRepo       // 评论仓储接口
+	txMgr *repository.TxManager     // 事务管理器
+	tcr   taskCommentSVCCommentRepo // 评论仓储接口
+	store cacheTaskCommentInvoker
 }
 
 // NewTaskCommentService 创建评论服务实例
 func NewTaskCommentService(
 	txMgr *repository.TxManager,
-	userRepo taskCommentSvcUserRepo,
-	projectMemberRepo taskCommentSVCProjectMemberRepo,
-	taskRepo taskCommentSVCTaskRepo,
 	taskCommentRepo taskCommentSVCCommentRepo,
+	store cacheTaskCommentInvoker,
 ) *TaskCommentService {
 	return &TaskCommentService{
 		txMgr: txMgr,
-		ur:    userRepo,
-		pmr:   projectMemberRepo,
-		tr:    taskRepo,
 		tcr:   taskCommentRepo,
+		store: store,
 	}
 }
 
@@ -102,23 +116,21 @@ func (s *TaskCommentService) CreateTaskComment(ctx context.Context, param *Creat
 
 	// 数据库查询，进行身份验证
 	// 获取用户创建者用户信息
-	user, err := s.ur.GetByID(ctx, param.CreatorID)
-	if err != nil {
-		if errors.Is(err, repository.ErrUserNotFound) {
-			logger.Warn("create task comment failed: creator user not found",
-				zap.Error(err),
-			)
-			return nil, ErrUserNotFound
-		}
-
+	user, exists, err := s.store.GetUserBriefInfo(ctx, param.CreatorID)
+	if err != nil && !errors.Is(err, repository.ErrUserNotFound) {
 		logger.Error("create task comment failed: get creator user error",
 			zap.Error(err),
 		)
 		return nil, err
 	}
+	if !exists {
+		logger.Warn("create task comment failed: creator user not found",
+			zap.Error(err))
+		return nil, ErrUserNotFound
+	}
 
 	// 查任务、再看是否是当前项目成员
-	task, err := validateTaskCommentAccess(ctx, s.pmr, s.tr, param.ProjectID, param.TaskID, param.CreatorID, logger)
+	task, err := validateTaskCommentAccess(ctx, s.store, param.ProjectID, param.TaskID, param.CreatorID, logger)
 	if err != nil {
 		// 返回两个错误：TaskNotFound 和 TaskForbidden
 		logger.Warn("create task comment failed: task comment access check error",
@@ -130,7 +142,7 @@ func (s *TaskCommentService) CreateTaskComment(ctx context.Context, param *Creat
 	var parentComment *model.TaskComment
 	if parentCommentID != nil {
 		// 说明任务正确且是项目成员，下一步判断父评论是否是当前任务
-		parentComment, err = s.tcr.GetCommentByID(ctx, *parentCommentID)
+		parentComment, err = s.tcr.GetDetailByID(ctx, *parentCommentID)
 		if err != nil {
 			if errors.Is(err, repository.ErrTaskCommentNotFound) {
 				// 父评论不存在
@@ -162,21 +174,19 @@ func (s *TaskCommentService) CreateTaskComment(ctx context.Context, param *Creat
 		replyToUserID = &v
 
 		// 如果有父评论
-		repliedUser, err := s.ur.GetByID(ctx, *replyToUserID)
-		if err != nil {
-			if errors.Is(err, repository.ErrUserNotFound) {
-				logger.Warn("create task comment failed: reply to user not found",
-					zap.Uint64("reply_to_user_id", *replyToUserID),
-					zap.Error(err),
-				)
-				return nil, ErrUserNotFound
-			}
-
+		repliedUser, exists, err := s.store.GetUserBriefInfo(ctx, *replyToUserID)
+		if err != nil && !errors.Is(err, repository.ErrUserNotFound) {
 			logger.Error("create task comment failed: get reply to user error",
 				zap.Uint64("reply_to_user_id", *replyToUserID),
 				zap.Error(err),
 			)
 			return nil, err
+		}
+		if !exists {
+			logger.Warn("create task comment failed: reply to user not found",
+				zap.Uint64("reply_to_user_id", *replyToUserID),
+				zap.Error(err))
+			return nil, ErrUserNotFound
 		}
 
 		replyToUser = buildUserPublicProfile(repliedUser)
@@ -258,7 +268,7 @@ func (s *TaskCommentService) ListTaskComments(ctx context.Context, param *ListTa
 	// 数据库进行身份验证
 	// 用户是否存在、项目是否存在、任务是否存在、用户是否是项目成员
 	// validateTaskCommentAccess 都完成了
-	task, err := validateTaskCommentAccess(ctx, s.pmr, s.tr, param.ProjectID, param.TaskID, param.UserID, logger)
+	task, err := validateTaskCommentAccess(ctx, s.store, param.ProjectID, param.TaskID, param.UserID, logger)
 	if err != nil {
 		// 调用返回两个错误：ErrTaskNotFound、ErrTaskForbidden
 		logger.Warn("list task comments failed: task comment access check error",
@@ -349,7 +359,7 @@ func (s *TaskCommentService) RemoveTaskComment(ctx context.Context, param *Remov
 	// 用户是否存在、项目是否存在、任务是否存在
 	// 用户是否是项目的owner/admin，或者是任务创始人
 
-	task, err := validateTaskCommentAccess(ctx, s.pmr, s.tr, param.ProjectID, param.TaskID, param.UserID, logger)
+	task, err := validateTaskCommentAccess(ctx, s.store, param.ProjectID, param.TaskID, param.UserID, logger)
 	if err != nil {
 		// 返回 ErrTaskNotFound/ErrTaskForbidden/查询数据库失败的err
 		logger.Warn("remove task comment failed: task comment access check error",
@@ -359,7 +369,7 @@ func (s *TaskCommentService) RemoveTaskComment(ctx context.Context, param *Remov
 	}
 
 	// 查询评论，校验评论是否存在
-	comment, err := s.tcr.GetCommentByID(ctx, param.CommentID)
+	comment, err := s.tcr.GetDetailByID(ctx, param.CommentID)
 	if err != nil {
 		if errors.Is(err, repository.ErrTaskCommentNotFound) {
 			logger.Warn("remove task comment failed: comment not found",
@@ -388,7 +398,7 @@ func (s *TaskCommentService) RemoveTaskComment(ctx context.Context, param *Remov
 	if !hasPermission {
 		// 如果不是创建者，进行数据库查询，看看是否是owner/admin
 		// 返回错误：ProjectMemberNotFound/err
-		hasPermission, err = hasProjectManagePermission(ctx, s.pmr, task.ProjectID, param.UserID, logger)
+		hasPermission, err = hasProjectManagePermission(ctx, s.store, task.ProjectID, param.UserID, logger)
 		if err != nil {
 			logger.Warn("remove task comment failed: project manage permission check error",
 				zap.Error(err),
@@ -428,37 +438,8 @@ func (s *TaskCommentService) RemoveTaskComment(ctx context.Context, param *Remov
 	return &dto.RemoveTaskCommentResp{}, nil
 }
 
-// taskCommentSvcUserRepo 用户仓储接口
-type taskCommentSvcUserRepo interface {
-	GetByID(ctx context.Context, id uint64) (*model.User, error)
-}
-
-// taskCommentSVCProjectMemberRepo  判断是否是项目成员接口
-type taskCommentSVCProjectMemberRepo interface {
-	ExistsByProjectIDAndUserID(ctx context.Context, projectID, userID uint64) (bool, error)
-	GetProjectMemberRoleByProjectIDAndUserID(ctx context.Context, projectID, userID uint64) (string, error)
-}
-
-// taskCommentSVCTaskRepo 任务获取接口
-type taskCommentSVCTaskRepo interface {
-	GetTaskByID(ctx context.Context, taskID uint64) (*model.Task, error)
-}
-
-// taskCommentSVCCommentRepo 评论服务依赖的评论仓储能力
-type taskCommentSVCCommentRepo interface {
-	CreateCommentWithTx(ctx context.Context, tx *gorm.DB, comment *model.TaskComment) error
-	SearchComments(ctx context.Context, query *repository.SearchTaskCommentsQuery) (*repository.SearchTaskCommentResult, error)
-	GetCommentByID(ctx context.Context, commentID uint64) (*model.TaskComment, error)
-	SoftDeleteCommentWithTx(ctx context.Context, tx *gorm.DB, commentID uint64) error
-
-	GetTaskCommentDeleteStatusByIDs(ctx context.Context, ids []uint64) ([]*model.TaskComment, error)
-}
-
 // buildParentDeletedMap 构造父评论删除状态映射
-func (s *TaskCommentService) buildParentDeletedMap(
-	ctx context.Context,
-	parentIDs []uint64,
-) (map[uint64]bool, error) {
+func (s *TaskCommentService) buildParentDeletedMap(ctx context.Context, parentIDs []uint64) (map[uint64]bool, error) {
 	parentDeletedMap := make(map[uint64]bool)
 
 	if len(parentIDs) == 0 {

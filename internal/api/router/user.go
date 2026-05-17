@@ -29,11 +29,11 @@ func RegisterUserRoutes(
 		userGroup.GET("", userHandler.ListUsers)
 
 		// 私有接口
-		privateUserGroup := userGroup.Group("/me")
+		privateUserGroup := userGroup.Group("/:userId")
 		privateUserGroup.Use(middleware.JWTAuth(jwtManager, authStore))
 		{
 			// 修改自己的资料
-			privateUserGroup.PUT("", userHandler.UpdateUserProfile)
+			privateUserGroup.PATCH("/profile", userHandler.UpdateUserProfile)
 
 			// 修改的密码
 			privateUserGroup.PATCH("/password", userHandler.UpdateUserPassword)

@@ -637,7 +637,7 @@ func TestRedisAuthStore_LogoutSession(t *testing.T) {
 		store, _, ctx := newMockRedisAuthStore(t)
 
 		mustSeedSession(t, store, ctx, &AuthSession{
-			UserID:     1000,
+			UserID:     1001,
 			Username:   "zhangsan",
 			SessionID:  "sess_real",
 			RefreshJTI: "rjti_001",

@@ -70,7 +70,7 @@ type ListTaskQuery struct {
 	Keyword   string  `form:"keyword" binding:"omitempty"`     // 搜索关键词
 	SortBy    string  `form:"sort_by" binding:"omitempty"`     // 排序字段
 	SortOrder string  `form:"sort_order" binding:"omitempty"`  // 排序方向
-	ProjectID *uint64 `form:"project_id" binding:"omitempty"`  // 任务ID
+	ProjectID *uint64 `form:"project_id" binding:"omitempty"`  // 任务ID。
 	AssigeeID *uint64 `form:"assignee_id" binding:"omitempty"` // 负责人。规定nil全量查找、0查找未分配
 }
 

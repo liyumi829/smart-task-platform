@@ -68,6 +68,7 @@ const (
 	InvalidProjectMemberRole   = 30011 // 项目成员角色不正确
 	ProjectMemberAlreadyExists = 30012 // 项目成员已存在
 	ExceededAdminMemberLimit   = 30013 // 项目管理员数量已达上限
+	ModifiedUserNotFound       = 30014 // 被修改的成员不存在
 
 	// =========================
 	// 任务模块 40000+
@@ -169,6 +170,7 @@ var codeMsgMap = map[int]string{
 	InvalidProjectMemberRole:   "Invalid project member role",
 	ProjectMemberAlreadyExists: "Project member already exists",
 	ExceededAdminMemberLimit:   "Project admin member limit has been reached",
+	ModifiedUserNotFound:       "Modified user not exists",
 
 	// =========================
 	// 任务错误信息

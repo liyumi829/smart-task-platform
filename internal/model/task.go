@@ -96,7 +96,7 @@ type Task struct {
 	// low       -> 4
 	//
 	// 该字段用于替代 ORDER BY FIELD(priority, ...)
-	PriorityOrder int `gorm:"column:priority_order;not null;default:3;comment:优先级排序值：1 urgent，2 high，3 medium，4 low" json:"priority_order"`
+	PriorityOrder int `gorm:"->;column:priority_order;not null;default:3;comment:优先级排序值：1 urgent，2 high，3 medium，4 low" json:"priority_order"`
 
 	// StatusOrder 状态排序值
 	//
@@ -106,7 +106,7 @@ type Task struct {
 	// cancelled   -> 4
 	//
 	// 该字段用于替代 ORDER BY FIELD(status, ...)
-	StatusOrder int `gorm:"column:status_order;not null;default:1;comment:状态排序值：1 todo，2 in_progress，3 done，4 cancelled" json:"status_order"`
+	StatusOrder int `gorm:"->;column:status_order;not null;default:1;comment:状态排序值：1 todo，2 in_progress，3 done，4 cancelled" json:"status_order"`
 
 	// DueDateNullOrder 截止时间 NULL 排序值
 	//
@@ -114,7 +114,7 @@ type Task struct {
 	// due_date 为空 -> 1
 	//
 	// 该字段用于替代 ORDER BY due_date IS NULL
-	DueDateNullOrder int `gorm:"column:due_date_null_order;not null;default:1;comment:截止时间NULL排序值：0非空，1为空" json:"due_date_null_order"`
+	DueDateNullOrder int `gorm:"->;column:due_date_null_order;not null;default:1;comment:截止时间NULL排序值：0非空，1为空" json:"due_date_null_order"`
 
 	CreatedAt time.Time      `gorm:"column:created_at;not null;autoCreateTime;comment:创建时间" json:"created_at"`
 	UpdatedAt time.Time      `gorm:"column:updated_at;not null;autoUpdateTime;comment:更新时间" json:"updated_at"`

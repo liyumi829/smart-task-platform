@@ -10,6 +10,7 @@ import (
 	"smart-task-platform/internal/pkg/utils"
 	"smart-task-platform/internal/pkg/validator"
 	"smart-task-platform/internal/repository"
+	cacheObj "smart-task-platform/internal/service/cachesvc/cacheobj"
 	"strings"
 	"time"
 
@@ -17,26 +18,51 @@ import (
 	"gorm.io/gorm"
 )
 
+type projectSvcProjectRepo interface {
+	CreateWithTx(ctx context.Context, tx *gorm.DB, project *model.Project) error
+	SearchProjects(ctx context.Context, query *repository.ProjectSearchQuery) (*repository.SearchProjectResult, error)
+	GetDetailByID(ctx context.Context, id uint64) (*model.Project, error)
+	UpdateProjectInformationWithTx(ctx context.Context, tx *gorm.DB, id uint64, data *repository.UpdateProjectData) error
+	ArchiveProjectWithTx(ctx context.Context, tx *gorm.DB, id uint64) error
+}
+
+type projectSvcProjectMemberRepo interface {
+	CreateWithTx(ctx context.Context, tx *gorm.DB, projectMember *model.ProjectMember) error
+	ListProjectIDsByUserID(ctx context.Context, userID uint64) ([]uint64, error)
+}
+
+type cacheProjectInvoker interface {
+	GetUserBriefInfo(ctx context.Context, userID uint64) (*model.User, bool, error)
+	GetUserProjectIDs(ctx context.Context, userID uint64) ([]uint64, error)
+	GetUserProjectList(ctx context.Context, query *cacheObj.UserProjectListQuery) ([]*model.Project, *int64, bool, error)
+
+	ProjectExists(ctx context.Context, projectID uint64) (bool, error)
+
+	IsProjectMember(ctx context.Context, projectID, userID uint64) (bool, error)
+	GetProjectMemberRole(ctx context.Context, projectID, userID uint64) (string, bool, error)
+	DeleteProjectExistsCache(ctx context.Context, projectID uint64) error
+}
+
 // ProjectService 项目服务
 type ProjectService struct {
 	txMgr *repository.TxManager       // 事务管理器
-	ur    projectSvcUserRepo          // 用户仓储接口
 	pr    projectSvcProjectRepo       // 项目仓储接口
 	pmr   projectSvcProjectMemberRepo // 项目成员仓储接口
+	store cacheProjectInvoker
 }
 
 // NewProjectService 创建项目服务实例
 func NewProjectService(
 	txMgr *repository.TxManager,
-	userRepo projectSvcUserRepo,
 	projectRepo projectSvcProjectRepo,
 	projectMemberRepo projectSvcProjectMemberRepo,
+	store cacheProjectInvoker,
 ) *ProjectService {
 	return &ProjectService{
 		txMgr: txMgr,
-		ur:    userRepo,
 		pr:    projectRepo,
 		pmr:   projectMemberRepo,
+		store: store,
 	}
 }
 
@@ -113,15 +139,16 @@ func (s *ProjectService) CreateProject(ctx context.Context, param *CreateProject
 	}
 
 	// 先检查用户信息
-	user, err := s.ur.GetByID(ctx, param.UserID)
-	if err != nil {
-		if errors.Is(err, repository.ErrUserNotFound) {
-			logger.Warn("create project failed: user not found")
-			return nil, ErrUserNotFound
-		}
+	user, exists, err := s.store.GetUserBriefInfo(ctx, param.UserID)
+	if err != nil && !errors.Is(err, repository.ErrUserNotFound) {
 		logger.Error("create project failed: get user error", zap.Error(err))
 		return nil, err
 	}
+	if !exists {
+		logger.Warn("create project failed: user not found")
+		return nil, ErrUserNotFound
+	}
+
 	// 准备插入数据
 	project := &model.Project{
 		Name:        param.Name,
@@ -215,7 +242,7 @@ func (s *ProjectService) ListProjects(ctx context.Context, param *ListProjectsPa
 	}
 
 	// 查询当前用户可见的项目 ID，保证只能看到自己参与的项目
-	projectIDs, err := s.pmr.ListProjectIDsByUserID(ctx, param.UserID)
+	projectIDs, err := s.store.GetUserProjectIDs(ctx, param.UserID)
 	if err != nil {
 		logger.Error("list projects failed: list visible project ids error", zap.Error(err))
 		return nil, err
@@ -235,12 +262,10 @@ func (s *ProjectService) ListProjects(ctx context.Context, param *ListProjectsPa
 	logger = logger.With(zap.Int("project_number", len(projectIDs)))
 
 	// 参数校验完成，进行搜索
-	result, err := s.pr.SearchProjects(ctx, &repository.ProjectSearchQuery{
-		SearchQuery: repository.SearchQuery{
-			Page:      page,
-			PageSize:  pageSize,
-			NeedTotal: param.NeedTotal,
-		},
+	projects, total, hasMore, err := s.store.GetUserProjectList(ctx, &cacheObj.UserProjectListQuery{
+		Page:       page,
+		PageSize:   pageSize,
+		NeedTotal:  param.NeedTotal,
 		Status:     status,
 		Keyword:    keyword,
 		ProjectIDs: projectIDs,
@@ -251,8 +276,8 @@ func (s *ProjectService) ListProjects(ctx context.Context, param *ListProjectsPa
 	}
 
 	// 搜索成功
-	list := make([]*dto.ProjectListItem, 0, len(result.List))
-	for _, project := range result.List {
+	list := make([]*dto.ProjectListItem, 0, len(projects))
+	for _, project := range projects {
 		if project == nil {
 			logger.Warn("list project skipped: nil project")
 			continue
@@ -270,17 +295,17 @@ func (s *ProjectService) ListProjects(ctx context.Context, param *ListProjectsPa
 	}
 
 	logger.Info("list projects success",
-		zap.Bool("has_more", result.HasMore),
+		zap.Bool("has_more", hasMore),
 		zap.Int("result_count", len(list)),
 	)
 
 	// 构造成功
 	return &dto.ProjectListResp{
 		List:     list,
-		Total:    utils.SafePtrClone(result.Total),
+		Total:    total,
 		Page:     page,
 		PageSize: pageSize,
-		HasMore:  result.HasMore,
+		HasMore:  hasMore,
 	}, nil
 }
 
@@ -304,7 +329,29 @@ func (s *ProjectService) GetProjectDetail(ctx context.Context, param *GetProject
 		zap.Uint64("project_id", param.ProjectID),
 	)
 
-	// 先查询项目是否存在
+	// 先校验项目是否存在
+	exists, err := s.store.ProjectExists(ctx, param.ProjectID)
+	if err != nil {
+		logger.Error("get project detail failed: check project exists error", zap.Error(err))
+		return nil, err
+	}
+	if !exists {
+		logger.Warn("get project detail failed: project not exists")
+		return nil, ErrProjectNotFound
+	}
+
+	// 再校验当前用户是否属于该项目
+	joined, err := s.store.IsProjectMember(ctx, param.ProjectID, param.UserID)
+	if err != nil {
+		logger.Error("get project detail failed: check project member error", zap.Error(err))
+		return nil, err
+	}
+	if !joined {
+		logger.Warn("get project detail failed: user is not a project member")
+		return nil, ErrProjectMemberNotFound
+	}
+
+	// 查验项目的详细状态
 	project, err := s.pr.GetDetailByID(ctx, param.ProjectID)
 	if err != nil {
 		if errors.Is(err, repository.ErrProjectNotFound) {
@@ -314,17 +361,6 @@ func (s *ProjectService) GetProjectDetail(ctx context.Context, param *GetProject
 
 		logger.Error("get project detail failed: get project detail db error", zap.Error(err))
 		return nil, err
-	}
-
-	// 再校验当前用户是否属于该项目
-	joined, err := s.pmr.ExistsByProjectIDAndUserID(ctx, param.ProjectID, param.UserID)
-	if err != nil {
-		logger.Error("get project detail failed: check project member error", zap.Error(err))
-		return nil, err
-	}
-	if !joined {
-		logger.Warn("get project detail failed: user has no permission")
-		return nil, ErrProjectMemberNotFound
 	}
 
 	// 找到了
@@ -425,7 +461,7 @@ func (s *ProjectService) UpdateProject(ctx context.Context, param *UpdateProject
 	}
 
 	// 进行 user 的身份验证，只有 owner 和 admin 可以更新项目数据
-	role, level, err := getProjectMemberRoleLevel(ctx, s.pmr, param.ProjectID, param.UserID, logger)
+	role, level, err := getProjectMemberRoleLevel(ctx, s.store, param.ProjectID, param.UserID, logger)
 	if err != nil {
 		logger.Warn("project call getProjectMemberRoleLevel error")
 		return nil, err
@@ -503,7 +539,7 @@ func (s *ProjectService) ArchiveProject(ctx context.Context, userID, projectID u
 	)
 
 	// 进行 user 的身份验证，只有 owner 和 admin 可以归档项目
-	role, level, err := getProjectMemberRoleLevel(ctx, s.pmr, projectID, userID, logger)
+	role, level, err := getProjectMemberRoleLevel(ctx, s.store, projectID, userID, logger)
 	if err != nil {
 		logger.Warn("project call getProjectMemberRoleLevel error")
 		return nil, err
@@ -535,23 +571,4 @@ func (s *ProjectService) ArchiveProject(ctx context.Context, userID, projectID u
 		ID:     projectID,
 		Status: model.ProjectStatusArchived,
 	}, nil
-}
-
-type projectSvcUserRepo interface {
-	GetByID(ctx context.Context, id uint64) (*model.User, error)
-}
-
-type projectSvcProjectRepo interface {
-	CreateWithTx(ctx context.Context, tx *gorm.DB, project *model.Project) error
-	SearchProjects(ctx context.Context, query *repository.ProjectSearchQuery) (*repository.SearchProjectResult, error)
-	GetDetailByID(ctx context.Context, id uint64) (*model.Project, error)
-	UpdateProjectInformationWithTx(ctx context.Context, tx *gorm.DB, id uint64, data *repository.UpdateProjectData) error
-	ArchiveProjectWithTx(ctx context.Context, tx *gorm.DB, id uint64) error
-}
-
-type projectSvcProjectMemberRepo interface {
-	CreateWithTx(ctx context.Context, tx *gorm.DB, projectMember *model.ProjectMember) error
-	ListProjectIDsByUserID(ctx context.Context, userID uint64) ([]uint64, error)
-	ExistsByProjectIDAndUserID(ctx context.Context, projectID, userID uint64) (bool, error)
-	GetProjectMemberByProjectIDAndUserID(ctx context.Context, projectID, userID uint64) (*model.ProjectMember, error)
 }

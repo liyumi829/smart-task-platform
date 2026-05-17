@@ -113,12 +113,7 @@ func isValidName(name string) bool {
 	// 2. 中间可以包含：英文、数字、汉字、下划线、【单个空格】
 	// 3. 禁止连续空格
 	// 4. 禁止首尾空格
-	// ^ 开头
-	// [a-zA-Z\p{Han}]+         首字符：英文、汉字（至少1个）
-	// (?: [a-zA-Z0-9_\p{Han}]+) 分组：以【单个空格】开头，后接合法字符
-	// *                        表示这一组可以出现 0 次或多次
-	// $ 结尾
-	reg := regexp.MustCompile(`^[a-zA-Z\p{Han}]+(?: [a-zA-Z0-9_\p{Han}]+)*$`)
+	reg := regexp.MustCompile(`^[a-zA-Z\p{Han}](?:[a-zA-Z0-9_\p{Han}]| [a-zA-Z0-9_\p{Han}])*$`)
 	return reg.MatchString(name)
 }
 

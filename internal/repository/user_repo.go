@@ -40,7 +40,50 @@ func (r *userRepository) Create(ctx context.Context, tx *gorm.DB, user *model.Us
 }
 
 // GetByID 根据 ID 查询用户
+// 获取部分信息
 func (r *userRepository) GetByID(ctx context.Context, id uint64) (*model.User, error) {
+	if id == 0 {
+		return nil, ErrInvalidUserParam
+	}
+
+	var user model.User
+	err := getDB(ctx, r.db, nil).
+		Select(getUserSelectColumns()).
+		Where(model.UserColumnID+" = ?", id).
+		First(&user).Error
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			// 没有找到对应的用户，返回自定义的 ErrUserNotFound 错误
+			return nil, ErrUserNotFound
+		}
+		return nil, err
+	}
+
+	return &user, nil
+}
+
+// BatchGetUsersByIDs 根据 ID 查询用户
+// 获取部分信息
+func (r *userRepository) BatchGetUsersByIDs(ctx context.Context, userIDs []uint64) ([]*model.User, error) {
+	if len(userIDs) == 0 {
+		return []*model.User{}, nil
+	}
+
+	var users []*model.User
+	err := getDB(ctx, r.db, nil).
+		Model(&model.User{}).
+		Select(getUserSelectColumns()).
+		Where(model.UserColumnID+" IN ?", userIDs).
+		Find(&users).Error
+
+	if err != nil {
+		return nil, err
+	}
+	return users, nil
+}
+
+// GetDetailByID 根据 ID 查询用户
+func (r *userRepository) GetDetailByID(ctx context.Context, id uint64) (*model.User, error) {
 	if id == 0 {
 		return nil, ErrInvalidUserParam
 	}
@@ -229,7 +272,7 @@ type UserSearchQuery struct {
 	SearchQuery
 }
 
-type SearchUserResult = SearchResult[*model.User]
+type UserSearchResult = SearchResult[*model.User]
 
 // SearchUsers 搜索用户列表。
 // 说明：
@@ -238,10 +281,10 @@ type SearchUserResult = SearchResult[*model.User]
 // 3. total 按需查询，避免每次 COUNT(*) 带来的性能开销
 // 4. hasMore 通过 Limit(pageSize + 1) 判断，不依赖 total
 // 5. keyword 为空时直接返回空列表，避免全表扫描
-func (r *userRepository) SearchUsers(ctx context.Context, query *UserSearchQuery) (*SearchUserResult, error) {
+func (r *userRepository) SearchUsers(ctx context.Context, query *UserSearchQuery) (*UserSearchResult, error) {
 	// 参数校验：避免非法分页和空关键词导致全表扫描。
 	if query == nil || query.Page <= 0 || query.PageSize <= 0 || query.Keyword == "" {
-		return &SearchUserResult{
+		return &UserSearchResult{
 			List:    []*model.User{},
 			Total:   nil,
 			HasMore: false,
@@ -274,7 +317,7 @@ func (r *userRepository) SearchUsers(ctx context.Context, query *UserSearchQuery
 
 		// 如果总数为 0，直接返回空结果，避免继续查询列表。
 		if total == 0 {
-			return &SearchUserResult{
+			return &UserSearchResult{
 				List:    []*model.User{},
 				Total:   totalPtr,
 				HasMore: false,
@@ -307,7 +350,7 @@ func (r *userRepository) SearchUsers(ctx context.Context, query *UserSearchQuery
 		users = users[:query.PageSize]
 	}
 
-	return &SearchUserResult{
+	return &UserSearchResult{
 		List:    users,
 		Total:   totalPtr,
 		HasMore: hasMore,

@@ -299,6 +299,11 @@ func (h *ProjectMemberHandler) UpdateProjectMember(c *gin.Context) {
 			logger.Warn("update project member rejected: admin member limit exceeded")
 			response.Fail(c, errmsg.ExceededAdminMemberLimit)
 
+		// 用户不存在
+		case errors.Is(err, service.ErrModifiedUserNotFound):
+			logger.Warn("update project member rejected: modified user not found")
+			response.Fail(c, errmsg.ModifiedUserNotFound)
+
 		// 项目不存在，统一处理成无权限
 		case errors.Is(err, service.ErrProjectNotFound):
 			logger.Warn("update project member failed: project not found")

@@ -161,8 +161,8 @@ func (r *taskCommentRepository) SoftDeleteCommentWithTx(ctx context.Context, tx 
 	return nil
 }
 
-// GetCommentByID 根据评论 ID 获取评论
-func (r *taskCommentRepository) GetCommentByID(ctx context.Context, commentID uint64) (*model.TaskComment, error) {
+// GetDetailByID 根据评论 ID 获取评论
+func (r *taskCommentRepository) GetDetailByID(ctx context.Context, commentID uint64) (*model.TaskComment, error) {
 	if commentID == 0 {
 		return nil, ErrInvalidTaskCommentParam
 	}

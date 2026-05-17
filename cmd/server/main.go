@@ -8,9 +8,11 @@ import (
 	"smart-task-platform/internal/api/handler"
 	"smart-task-platform/internal/api/router"
 	"smart-task-platform/internal/bootstrap"
+	"smart-task-platform/internal/cache"
 	redispkg "smart-task-platform/internal/pkg/redis"
 	"smart-task-platform/internal/repository"
 	"smart-task-platform/internal/service"
+	"smart-task-platform/internal/service/cachesvc"
 
 	"net/http"
 	_ "net/http/pprof"
@@ -74,13 +76,17 @@ func main() {
 	taskRepo := repository.NewTaskRepository(db)                   // 任务表仓储
 	taskCommentRepo := repository.NewTaskCommentRepository(db)     // 任务评论表仓储
 
+	// 缓存服务
+	cacheStore := cache.NewRedisCacheStore(redis)
+	cacheService := cachesvc.NewCacheService(cacheStore, userRepo, projectRepo, projectMemberRepo, taskRepo, nil)
+
 	// 初始化服务
-	authService := service.NewAuthService(txManager, userRepo, authStore, jwtManager)                                      // 鉴权服务
-	userService := service.NewUserService(txManager, userRepo)                                                             // 用户服务
-	projectService := service.NewProjectService(txManager, userRepo, projectRepo, projectMemberRepo)                       // 项目服务
-	projectMemberService := service.NewProjectMemberService(txManager, userRepo, projectRepo, projectMemberRepo, taskRepo) // 项目成员服务
-	taskService := service.NewTaskService(txManager, userRepo, projectRepo, projectMemberRepo, taskRepo)                   // 任务服务
-	taskCommentService := service.NewTaskCommentService(txManager, userRepo, projectMemberRepo, taskRepo, taskCommentRepo) // 任务评论服务
+	authService := service.NewAuthService(txManager, userRepo, authStore, jwtManager)                                          // 鉴权服务
+	userService := service.NewUserService(txManager, userRepo, cacheService)                                                   // 用户服务
+	projectService := service.NewProjectService(txManager, projectRepo, projectMemberRepo, cacheService)                       // 项目服务
+	projectMemberService := service.NewProjectMemberService(txManager, projectRepo, projectMemberRepo, taskRepo, cacheService) // 项目成员服务
+	taskService := service.NewTaskService(txManager, taskRepo, cacheService)                                                   // 任务服务
+	taskCommentService := service.NewTaskCommentService(txManager, taskCommentRepo, cacheService)                              // 任务评论服务
 
 	// 初始化 Handler
 	authHandler := handler.NewAuthHandler(authService)                            // 鉴权 Handler

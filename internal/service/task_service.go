@@ -10,35 +10,50 @@ import (
 	"smart-task-platform/internal/pkg/utils"
 	"smart-task-platform/internal/pkg/validator"
 	"smart-task-platform/internal/repository"
+	cacheObj "smart-task-platform/internal/service/cachesvc/cacheobj"
+
 	"time"
 
 	"go.uber.org/zap"
 	"gorm.io/gorm"
 )
 
+type cacheTaskInvoker interface {
+	UserExists(ctx context.Context, userID uint64) (bool, error)
+	GetUserBriefInfo(ctx context.Context, userID uint64) (*model.User, bool, error)
+
+	ProjectExists(ctx context.Context, projectID uint64) (bool, error)
+
+	IsProjectMember(ctx context.Context, projectID, userID uint64) (bool, error)
+	GetProjectMemberRole(ctx context.Context, projectID, userID uint64) (string, bool, error)
+
+	GetProjectTaskList(ctx context.Context, query *cacheObj.TaskListQuery) ([]*model.Task, *int64, bool, error)
+	GetUserTaskList(ctx context.Context, query *cacheObj.TaskListQuery) ([]*model.Task, *int64, bool, error)
+	GetTaskDetailInfo(ctx context.Context, taskID uint64) (*model.Task, bool, error)
+	DeleteTaskPermissionInfoCache(ctx context.Context, taskID uint64) error
+	DeleteTaskDetailInfoCache(ctx context.Context, taskID uint64) error
+	DeleteTaskListItemCache(ctx context.Context, taskID uint64) error
+	BumpTaskListPage(ctx context.Context) error
+	DeleteTaskAllCache(ctx context.Context, taskID uint64) error
+}
+
 // TaskService 任务服务
 type TaskService struct {
 	txMgr *repository.TxManager // 事务管理器
-	ur    taskSvcUserRepo
-	pr    taskSvcProjectRepo
-	pmr   taskSvcProjectMemberRepo
 	tr    taskSvcTaskrRepo
+	store cacheTaskInvoker
 }
 
 // NewTaskService 创建任务服务实例
 func NewTaskService(
 	txMgr *repository.TxManager,
-	userRepo taskSvcUserRepo,
-	projectRepo taskSvcProjectRepo,
-	projectMemberRepo taskSvcProjectMemberRepo,
 	taskRepo taskSvcTaskrRepo,
+	store cacheTaskInvoker,
 ) *TaskService {
 	return &TaskService{
 		txMgr: txMgr,
-		ur:    userRepo,
-		pr:    projectRepo,
-		pmr:   projectMemberRepo,
 		tr:    taskRepo,
+		store: store,
 	}
 }
 
@@ -115,7 +130,7 @@ func (s *TaskService) CreateTask(ctx context.Context, param *CreateTaskParam) (*
 	// 下面查数据库对参数校验
 	// 项目是否存在、创建者是否存在、负责人是否存在
 	// 检查项目是否存在
-	exists, err := s.pr.ExistsByProjectID(ctx, param.ProjectID)
+	exists, err := s.store.ProjectExists(ctx, param.ProjectID)
 	if err != nil {
 		logger.Error("create task failed: check project exists error", zap.Error(err))
 		return nil, err
@@ -126,19 +141,19 @@ func (s *TaskService) CreateTask(ctx context.Context, param *CreateTaskParam) (*
 	}
 
 	// 检查创建者是否存在+拿到创建者信息
-	creator, err := s.ur.GetByID(ctx, param.CreatorID)
-	if err != nil {
-		if errors.Is(err, repository.ErrUserNotFound) {
-			logger.Warn("create task failed: creator not found")
-			return nil, ErrUserNotFound
-		}
-
+	creator, exists, err := s.store.GetUserBriefInfo(ctx, param.CreatorID)
+	if err != nil && !errors.Is(err, repository.ErrUserNotFound) {
 		logger.Error("create task failed: get creator error", zap.Error(err))
 		return nil, err
 	}
+	if !exists {
+		logger.Warn("create task failed: creator not found")
+		return nil, ErrUserNotFound
+	}
+
 	// 存在检查创建者是否是项目成员（普通成员也可以创建任务）
-	isMember, err := s.pmr.ExistsByProjectIDAndUserID(ctx, param.ProjectID, param.CreatorID)
-	if err != nil {
+	isMember, err := s.store.IsProjectMember(ctx, param.ProjectID, param.CreatorID)
+	if err != nil && !errors.Is(err, repository.ErrProjectMemberNotFound) {
 		logger.Error("create task failed: check creator project member error", zap.Error(err))
 		return nil, err
 	}
@@ -150,18 +165,19 @@ func (s *TaskService) CreateTask(ctx context.Context, param *CreateTaskParam) (*
 	var newAssigneeID *uint64 // 避免指向param结构，默认nil
 	var assignee *model.User  // 指向 model 实例不复制
 	if param.AssigneeID != 0 {
-		assignee, err = s.ur.GetByID(ctx, param.AssigneeID)
-		if err != nil {
-			if errors.Is(err, repository.ErrUserNotFound) {
-				logger.Warn("create task failed: assignee user not found")
-				return nil, ErrAssigneeNotFount // 指派的负责人不存在
-			}
+		assignee, exists, err = s.store.GetUserBriefInfo(ctx, param.AssigneeID)
+		if err != nil && !errors.Is(err, repository.ErrUserNotFound) { // 非用户不存在数据库错误
 			logger.Error("create task failed: get assignee error", zap.Error(err))
 			return nil, err
 		}
+		if !exists { // 指派的负责人是不存在的
+			logger.Warn("create task failed: assignee user not found")
+			return nil, ErrAssigneeNotFount // 指派的负责人不存在
+		}
+
 		// 检查负责人是否是项目成员
-		isMember, err = s.pmr.ExistsByProjectIDAndUserID(ctx, param.ProjectID, param.AssigneeID)
-		if err != nil {
+		isMember, err = s.store.IsProjectMember(ctx, param.ProjectID, param.AssigneeID)
+		if err != nil && !errors.Is(err, repository.ErrProjectMemberNotFound) {
 			logger.Error("create task failed: check assignee project member error", zap.Error(err))
 			return nil, err
 		}
@@ -281,21 +297,10 @@ func (s *TaskService) ListProjectTasks(ctx context.Context, param *ListProjectTa
 	}
 
 	// 对数据库数据进行校验
-	// 判断检查用户是否存在、项目是否存在、判断用户是否有权限、负责人是否是项目成员
-
-	// 用户是否存在
-	exists, err := s.ur.ExistsByUserID(ctx, param.UserID)
-	if err != nil {
-		logger.Error("list project tasks failed: check user exists error", zap.Error(err))
-		return nil, err
-	}
-	if !exists {
-		logger.Warn("list project tasks failed: user not found")
-		return nil, ErrUserNotFound
-	}
+	// 判断检查项目是否存在、判断用户是否有权限、负责人是否是项目成员
 
 	// 项目是否存在
-	exists, err = s.pr.ExistsByProjectID(ctx, param.ProjectID)
+	exists, err := s.store.ProjectExists(ctx, param.ProjectID)
 	if err != nil {
 		logger.Error("list project tasks failed: check project exists error", zap.Error(err))
 		return nil, err
@@ -306,11 +311,12 @@ func (s *TaskService) ListProjectTasks(ctx context.Context, param *ListProjectTa
 	}
 
 	// 存在检查用户是否是项目成员（普通成员也可以查询任务）
-	isMember, err := s.pmr.ExistsByProjectIDAndUserID(ctx, param.ProjectID, param.UserID)
-	if err != nil {
+	isMember, err := s.store.IsProjectMember(ctx, param.ProjectID, param.UserID)
+	if err != nil && !errors.Is(err, repository.ErrProjectMemberNotFound) {
 		logger.Error("list project tasks failed: check user project member error", zap.Error(err))
 		return nil, err
 	}
+
 	if !isMember {
 		logger.Warn("list project tasks failed: user is not project member")
 		return nil, ErrProjectForbidden
@@ -322,7 +328,7 @@ func (s *TaskService) ListProjectTasks(ctx context.Context, param *ListProjectTa
 		v := *param.AssigneeID
 		// assignee_id = 0 表示查询未分配任务，不需要校验成员关系，但必须继续传给 repository
 		if v != 0 { // 有效的
-			exists, err = s.ur.ExistsByUserID(ctx, *param.AssigneeID)
+			exists, err = s.store.UserExists(ctx, *param.AssigneeID) // 判断负责人是否存在
 			if err != nil {
 				logger.Error("list project tasks failed: check assignee exists error", zap.Error(err))
 				return nil, err
@@ -332,8 +338,8 @@ func (s *TaskService) ListProjectTasks(ctx context.Context, param *ListProjectTa
 				return nil, ErrAssigneeNotFount
 			}
 
-			isMember, err = s.pmr.ExistsByProjectIDAndUserID(ctx, param.ProjectID, *param.AssigneeID)
-			if err != nil {
+			isMember, err = s.store.IsProjectMember(ctx, param.ProjectID, *param.AssigneeID)
+			if err != nil && !errors.Is(err, repository.ErrProjectMemberNotFound) {
 				logger.Error("list project tasks failed: check assignee project member error", zap.Error(err))
 				return nil, err
 			}
@@ -347,7 +353,7 @@ func (s *TaskService) ListProjectTasks(ctx context.Context, param *ListProjectTa
 	}
 
 	// 查询
-	result, err := s.tr.SearchTasks(ctx, &repository.TaskSearchQuery{
+	items, total, hasMore, err := s.store.GetProjectTaskList(ctx, &cacheObj.TaskListQuery{
 		Page:       page,
 		PageSize:   pageSize,
 		ProjectID:  param.ProjectID,
@@ -365,8 +371,8 @@ func (s *TaskService) ListProjectTasks(ctx context.Context, param *ListProjectTa
 	}
 
 	// 搜索成功 构造list
-	list := make([]*dto.ProjectTaskListItem, 0, len(result.List))
-	for _, task := range result.List {
+	list := make([]*dto.ProjectTaskListItem, 0, len(items))
+	for _, task := range items {
 		if task == nil { // 防御
 			continue
 		}
@@ -379,17 +385,17 @@ func (s *TaskService) ListProjectTasks(ctx context.Context, param *ListProjectTa
 	}
 
 	logger.Info("list project tasks success",
-		zap.Bool("has_more", result.HasMore),
+		zap.Bool("has_more", hasMore),
 		zap.Int("list_size", len(list)),
 	)
 
 	// 成功 构造响应
 	return &dto.ProjectTaskListResp{
 		List:     list,
-		Total:    utils.SafePtrClone(result.Total),
+		Total:    utils.SafePtrClone(total),
 		Page:     page,
 		PageSize: pageSize,
-		HasMore:  result.HasMore,
+		HasMore:  hasMore,
 	}, nil
 }
 
@@ -457,23 +463,11 @@ func (s *TaskService) ListUserTasks(ctx context.Context, param *ListUserTasksPar
 	}
 
 	// 对数据库数据进行校验
-	// 判断检查用户是否存在、项目是否存在、判断用户是否有权限
-
-	// 用户是否存在
-	exists, err := s.ur.ExistsByUserID(ctx, param.UserID)
-	if err != nil {
-		logger.Error("list user tasks failed: check user exists error", zap.Error(err))
-		return nil, err
-	}
-	if !exists {
-		logger.Warn("list user tasks failed: user not found")
-		return nil, ErrUserNotFound
-	}
-
+	// 判断检查项目是否存在、判断用户是否有权限
 	if param.ProjectID != 0 {
 		// 如果项目ID != 0，检查该用户是否是项目成员
 		// 项目是否存在
-		exists, err = s.pr.ExistsByProjectID(ctx, param.ProjectID)
+		exists, err := s.store.ProjectExists(ctx, param.ProjectID)
 		if err != nil {
 			logger.Error("list user tasks failed: check project exists error", zap.Error(err))
 			return nil, err
@@ -484,8 +478,8 @@ func (s *TaskService) ListUserTasks(ctx context.Context, param *ListUserTasksPar
 		}
 
 		// 存在检查用户是否是项目成员
-		isMember, err := s.pmr.ExistsByProjectIDAndUserID(ctx, param.ProjectID, param.UserID)
-		if err != nil {
+		isMember, err := s.store.IsProjectMember(ctx, param.ProjectID, param.UserID)
+		if err != nil && !errors.Is(err, repository.ErrProjectMemberNotFound) {
 			logger.Error("list user tasks failed: check user project member error", zap.Error(err))
 			return nil, err
 		}
@@ -495,8 +489,8 @@ func (s *TaskService) ListUserTasks(ctx context.Context, param *ListUserTasksPar
 		}
 	}
 
-	assigneeID := param.UserID                                        // 避免直接把结构体字段地址传入 repository
-	result, err := s.tr.SearchTasks(ctx, &repository.TaskSearchQuery{ // 进行批量查询
+	assigneeID := param.UserID // 避免直接把结构体字段地址传入 repository
+	items, total, hasMore, err := s.store.GetUserTaskList(ctx, &cacheObj.TaskListQuery{
 		Page:       page,
 		PageSize:   pageSize,
 		ProjectID:  param.ProjectID,
@@ -514,8 +508,8 @@ func (s *TaskService) ListUserTasks(ctx context.Context, param *ListUserTasksPar
 	}
 
 	// 搜索成功 构造list
-	list := make([]*dto.UserTaskListItem, 0, len(result.List))
-	for _, task := range result.List {
+	list := make([]*dto.UserTaskListItem, 0, len(items))
+	for _, task := range items {
 		if task == nil { // 防御
 			continue
 		}
@@ -527,17 +521,17 @@ func (s *TaskService) ListUserTasks(ctx context.Context, param *ListUserTasksPar
 	}
 
 	logger.Info("list user tasks success",
-		zap.Bool("has_more", result.HasMore),
+		zap.Bool("has_more", hasMore),
 		zap.Int("list_size", len(list)),
 	)
 
 	// 成功 构造响应
 	return &dto.UserTaskListResp{
 		List:     list,
-		Total:    utils.SafePtrClone(result.Total),
+		Total:    utils.SafePtrClone(total),
 		Page:     page,
 		PageSize: pageSize,
-		HasMore:  result.HasMore,
+		HasMore:  hasMore,
 	}, nil
 }
 
@@ -567,29 +561,16 @@ func (s *TaskService) GetTaskDetail(ctx context.Context, param *GetTaskDetailPar
 		zap.Uint64("task_id", param.TaskID),
 	)
 
-	// 查询数据库查看是否符合权限
-	// 先查看用户是否存在
-	exists, err := s.ur.ExistsByUserID(ctx, param.UserID)
-	if err != nil {
-		logger.Error("get task detail failed: check user exists error", zap.Error(err))
+	// 获取任务详情
+	// 一个用户可以查看的任务详情：他也是这个项目中的成员、他自己的任务
+	task, exists, err := s.store.GetTaskDetailInfo(ctx, param.TaskID)
+	if err != nil && !errors.Is(err, repository.ErrTaskNotFound) {
+		logger.Error("get task detail failed: get task by id error", zap.Error(err))
 		return nil, err
 	}
 	if !exists {
-		logger.Warn("get task detail failed: user not found")
-		return nil, ErrUserNotFound
-	}
-
-	// 获取任务详情
-	// 一个用户可以查看的任务详情：他也是这个项目中的成员、他自己的任务
-	task, err := s.tr.GetTaskByID(ctx, param.TaskID)
-	if err != nil {
-		if errors.Is(err, repository.ErrTaskNotFound) {
-			logger.Warn("get task detail failed: task not found")
-			return nil, ErrTaskNotFound
-		}
-
-		logger.Error("get task detail failed: get task by id error", zap.Error(err))
-		return nil, err
+		logger.Warn("get task detail failed: task not found")
+		return nil, ErrTaskNotFound
 	}
 
 	logger = logger.With(
@@ -599,8 +580,8 @@ func (s *TaskService) GetTaskDetail(ctx context.Context, param *GetTaskDetailPar
 
 	// 找到了，进行合法性判断
 	// 检查用户是否是这个任务所属的项目的成员
-	isMember, err := s.pmr.ExistsByProjectIDAndUserID(ctx, task.ProjectID, param.UserID)
-	if err != nil {
+	isMember, err := s.store.IsProjectMember(ctx, task.ProjectID, param.UserID)
+	if err != nil && !errors.Is(err, repository.ErrProjectMemberNotFound) {
 		logger.Error("get task detail failed: check user project member error", zap.Error(err))
 		return nil, err
 	}
@@ -744,7 +725,7 @@ func (s *TaskService) UpdateTaskBaseInfo(ctx context.Context, param *UpdateTaskB
 	// owner、admin、任务创建人可以操作。
 	// 获取任务信息得到任务创建人(isCreator)
 	// 查询任务信息，用于权限判断和构建返回数据
-	task, err := s.tr.GetTaskByID(ctx, param.TaskID)
+	task, err := s.tr.GetDetailByID(ctx, param.TaskID)
 	if err != nil {
 		if errors.Is(err, repository.ErrTaskNotFound) {
 			logger.Warn("update task base info failed: task not found")
@@ -768,7 +749,7 @@ func (s *TaskService) UpdateTaskBaseInfo(ctx context.Context, param *UpdateTaskB
 	isCreator := task.CreatorID == param.UserID
 	hasPermission := isCreator
 	if !hasPermission {
-		hasPermission, err = hasProjectManagePermission(ctx, s.pmr, task.ProjectID, param.UserID, logger)
+		hasPermission, err = hasProjectManagePermission(ctx, s.store, task.ProjectID, param.UserID, logger)
 		if err != nil {
 			logger.Warn("update task base info failed: project manage permission check error",
 				zap.Error(err),
@@ -819,6 +800,10 @@ func (s *TaskService) UpdateTaskBaseInfo(ctx context.Context, param *UpdateTaskB
 		)
 		return nil, err
 	}
+	// 更新基础信息之后，删除缓存
+	s.store.DeleteTaskListItemCache(ctx, task.ID) // 删除旧缓存
+	s.store.DeleteTaskDetailInfoCache(ctx, task.ID)
+	s.store.BumpTaskListPage(ctx) // 版本号迭代
 
 	// 基于原任务构建返回字段，再覆盖本次更新后的字段
 	baseField := buildTaskBaseFields(task)
@@ -901,7 +886,7 @@ func (s *TaskService) UpdateTaskStatus(ctx context.Context, param *UpdateTaskSta
 
 	// 从数据库中取数据判断当前身份是否合法
 	// 查询任务信息，用于权限判断和状态流转判断
-	task, err := s.tr.GetTaskByID(ctx, param.TaskID)
+	task, err := s.tr.GetDetailByID(ctx, param.TaskID)
 	if err != nil {
 		if errors.Is(err, repository.ErrTaskNotFound) {
 			logger.Warn("update task status failed: task not found")
@@ -927,7 +912,7 @@ func (s *TaskService) UpdateTaskStatus(ctx context.Context, param *UpdateTaskSta
 	isAssignee := task.AssigneeID != nil && *task.AssigneeID == param.UserID
 	hasPermission := isCreator || isAssignee
 	if !hasPermission {
-		hasPermission, err = hasProjectManagePermission(ctx, s.pmr, task.ProjectID, param.UserID, logger)
+		hasPermission, err = hasProjectManagePermission(ctx, s.store, task.ProjectID, param.UserID, logger)
 		if err != nil {
 			logger.Warn("update task status failed: project manage permission check error",
 				zap.Error(err),
@@ -986,6 +971,7 @@ func (s *TaskService) UpdateTaskStatus(ctx context.Context, param *UpdateTaskSta
 		)
 		return nil, err
 	}
+	s.store.DeleteTaskAllCache(ctx, task.ID) // 删除相关所有缓存
 
 	// 基于旧任务数据构造更新后的返回字段
 	startTime := task.StartTime // 旧时间
@@ -1055,7 +1041,7 @@ func (s *TaskService) UpdateTaskAssignee(ctx context.Context, param *UpdateTaskA
 
 	// 从数据库中取数据判断当前身份是否合法
 	// 查询任务信息，用于权限判断和构建返回数据
-	task, err := s.tr.GetTaskByID(ctx, param.TaskID)
+	task, err := s.tr.GetDetailByID(ctx, param.TaskID)
 	if err != nil {
 		if errors.Is(err, repository.ErrTaskNotFound) {
 			logger.Warn("update task assignee failed: task not found")
@@ -1080,7 +1066,7 @@ func (s *TaskService) UpdateTaskAssignee(ctx context.Context, param *UpdateTaskA
 	hasPermission := isCreator
 
 	if !hasPermission {
-		hasPermission, err = hasProjectManagePermission(ctx, s.pmr, task.ProjectID, param.UserID, logger)
+		hasPermission, err = hasProjectManagePermission(ctx, s.store, task.ProjectID, param.UserID, logger)
 		if err != nil {
 			logger.Warn("update task assignee failed: project manage permission check error",
 				zap.Error(err),
@@ -1099,25 +1085,26 @@ func (s *TaskService) UpdateTaskAssignee(ctx context.Context, param *UpdateTaskA
 	// 看看负责人是否存在
 	// 如果设置了新负责人，需要校验负责人是否存在且属于当前项目
 	var assignee *model.User
+	var exists bool
 	if param.AssigneeID != nil {
 		assigneeLogger := logger.With(zap.Uint64("assignee_id", *param.AssigneeID))
 
-		assignee, err = s.ur.GetByID(ctx, *param.AssigneeID)
-		if err != nil {
-			if errors.Is(err, repository.ErrUserNotFound) {
-				assigneeLogger.Warn("update task assignee failed: assignee user not found")
-				return nil, ErrAssigneeNotFount
-			}
-
+		assignee, exists, err = s.store.GetUserBriefInfo(ctx, *param.AssigneeID)
+		if err != nil && !errors.Is(err, repository.ErrUserNotFound) { // 不是数据库报错负责人不存在错误
 			assigneeLogger.Error("update task assignee failed: get assignee user error",
 				zap.Error(err),
 			)
 			return nil, err
 		}
+		if !exists {
+			// 非负责人不存在
+			assigneeLogger.Warn("update task assignee failed: assignee user not found")
+			return nil, ErrAssigneeNotFount
+		}
 
 		// 负责人必须是项目成员
-		isMember, err := s.pmr.ExistsByProjectIDAndUserID(ctx, task.ProjectID, assignee.ID)
-		if err != nil {
+		isMember, err := s.store.IsProjectMember(ctx, task.ProjectID, assignee.ID)
+		if err != nil && !errors.Is(err, repository.ErrProjectMemberNotFound) {
 			assigneeLogger.Error("update task assignee failed: check assignee project member error",
 				zap.Error(err),
 			)
@@ -1169,6 +1156,7 @@ func (s *TaskService) UpdateTaskAssignee(ctx context.Context, param *UpdateTaskA
 		)
 		return nil, err
 	}
+	s.store.DeleteTaskAllCache(ctx, task.ID) // 忽略错误
 
 	logger.Info("update task assignee success",
 		zap.Bool("clear_assignee", newAssigneeID == nil),
@@ -1233,7 +1221,7 @@ func (s *TaskService) UpdateTaskSortOrder(ctx context.Context, param *UpdateTask
 
 	// 权限校验：
 	// 只有项目 owner/admin 可以调整项目任务排序
-	hasPermission, err := hasProjectManagePermission(ctx, s.pmr, param.ProjectID, param.UserID, logger)
+	hasPermission, err := hasProjectManagePermission(ctx, s.store, param.ProjectID, param.UserID, logger)
 	if err != nil {
 		logger.Warn("update task sort order failed: project manage permission check error",
 			zap.Error(err),
@@ -1318,7 +1306,7 @@ func (s *TaskService) RemoveTask(ctx context.Context, param *RemoveTaskParam) (*
 	}
 
 	// 查询任务信息，用于权限判断
-	task, err := s.tr.GetTaskByID(ctx, param.TaskID)
+	task, err := s.tr.GetByID(ctx, param.TaskID)
 	if err != nil {
 		if errors.Is(err, repository.ErrTaskNotFound) {
 			logger.Warn("delete task failed: task not found")
@@ -1343,7 +1331,7 @@ func (s *TaskService) RemoveTask(ctx context.Context, param *RemoveTaskParam) (*
 	hasPermission := isCreator
 
 	if !hasPermission {
-		hasPermission, err = hasProjectManagePermission(ctx, s.pmr, task.ProjectID, param.UserID, logger)
+		hasPermission, err = hasProjectManagePermission(ctx, s.store, task.ProjectID, param.UserID, logger)
 		if err != nil {
 			logger.Warn("delete task failed: project manage permission check error",
 				zap.Error(err),
@@ -1374,41 +1362,21 @@ func (s *TaskService) RemoveTask(ctx context.Context, param *RemoveTaskParam) (*
 		)
 		return nil, err
 	}
+	s.store.DeleteTaskAllCache(ctx, task.ID) // 忽略错误
 
 	logger.Info("delete task success")
 
 	return &dto.RemoveTaskResp{}, nil
 }
 
-// taskSvcUserRepo 用户仓储接口
-type taskSvcUserRepo interface {
-	GetByID(ctx context.Context, id uint64) (*model.User, error)
-	ExistsByUserID(ctx context.Context, userID uint64) (bool, error)
-}
-
-// taskSvcProjectRepo 项目仓储接口
-type taskSvcProjectRepo interface {
-	ExistsByProjectID(ctx context.Context, projectID uint64) (bool, error)
-}
-
-// taskSvcProjectMemberRepo 项目成员仓储接口
-type taskSvcProjectMemberRepo interface {
-	ExistsByProjectIDAndUserID(ctx context.Context, projectID, userID uint64) (bool, error)
-	GetProjectMemberRoleByProjectIDAndUserID(ctx context.Context, projectID, userID uint64) (string, error)
-}
-
 // taskSvcTaskRepo 任务仓储接口
 type taskSvcTaskrRepo interface {
 	CreateWithTx(ctx context.Context, tx *gorm.DB, task *model.Task) error
 	SearchTasks(ctx context.Context, query *repository.TaskSearchQuery) (*repository.TaskSearchResult, error)
-	GetTaskByID(ctx context.Context, taskID uint64) (*model.Task, error)
+	GetDetailByID(ctx context.Context, taskID uint64) (*model.Task, error)
+	GetByID(ctx context.Context, taskID uint64) (*model.Task, error)
 	UpdateTaskByIDWithTx(ctx context.Context, tx *gorm.DB, taskID uint64, param *repository.UpdateTaskParam) error
-	BatchUpdateTaskSortWithTx(ctx context.Context,
-		tx *gorm.DB,
-		projectID uint64,
-		items []*repository.TaskSortItem,
-		updatedAt time.Time,
-	) error
+	BatchUpdateTaskSortWithTx(ctx context.Context, tx *gorm.DB, projectID uint64, items []*repository.TaskSortItem, updatedAt time.Time) error
 	SoftDeleteTaskByIDWithTx(ctx context.Context, tx *gorm.DB, taskID uint64) error
 
 	CountTasksByProjectIDAndIDs(ctx context.Context, projectID uint64, taskIDs []uint64) (int64, error)

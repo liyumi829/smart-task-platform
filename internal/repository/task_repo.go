@@ -197,30 +197,6 @@ func (r *taskRepository) UpdateTaskByIDWithTx(ctx context.Context, tx *gorm.DB, 
 	return nil
 }
 
-// GetTaskByID 获取任务详情
-func (r *taskRepository) GetTaskByID(ctx context.Context, taskID uint64) (*model.Task, error) {
-	if taskID == 0 {
-		return nil, ErrInvalidTaskParam
-	}
-
-	var task model.Task
-	err := getDB(ctx, r.db, nil).
-		Preload(model.TaskAssocProject, SelectProjectFields).
-		Preload(model.TaskAssocAssignee, SelectUserFields).
-		Preload(model.TaskAssocCreator, SelectUserFields).
-		Model(&model.Task{}).
-		Where(model.TaskColumnID+" = ?", taskID).
-		First(&task).Error
-
-	if err != nil {
-		if errors.Is(err, gorm.ErrRecordNotFound) {
-			return nil, ErrTaskNotFound
-		}
-		return nil, err
-	}
-	return &task, nil
-}
-
 // TaskSearchQuery 项目成员列表查询参数
 //
 // 复用，确定assignee_id即可
@@ -414,6 +390,77 @@ func (r *taskRepository) BatchUpdateTaskSortWithTx(ctx context.Context,
 	}
 
 	return nil
+}
+
+// GetDetailByID 获取任务详情
+func (r *taskRepository) GetDetailByID(ctx context.Context, taskID uint64) (*model.Task, error) {
+	if taskID == 0 {
+		return nil, ErrInvalidTaskParam
+	}
+
+	var task model.Task
+	err := getDB(ctx, r.db, nil).
+		Preload(model.TaskAssocProject, SelectProjectFields).
+		Preload(model.TaskAssocAssignee, SelectUserFields).
+		Preload(model.TaskAssocCreator, SelectUserFields).
+		Model(&model.Task{}).
+		Where(model.TaskColumnID+" = ?", taskID).
+		First(&task).Error
+
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrTaskNotFound
+		}
+		return nil, err
+	}
+	return &task, nil
+}
+
+// GetByID 获取任务简要信息（权限判定 + 任务表项）
+func (r *taskRepository) GetByID(ctx context.Context, taskID uint64) (*model.Task, error) {
+	// 基础参数校验
+	if taskID == 0 {
+		return nil, ErrInvalidTaskParam
+	}
+
+	var task model.Task
+	err := getDB(ctx, r.db, nil).
+		Model(&model.Task{}).
+		Select(getTaskSelectColumns()). // 公共字段，复用
+		Where(model.TaskColumnID+" = ?", taskID).
+		First(&task).Error
+
+	if err != nil {
+		if errors.Is(err, gorm.ErrRecordNotFound) {
+			return nil, ErrTaskNotFound
+		}
+		return nil, err
+	}
+
+	return &task, nil
+}
+
+// BatchGetTasksByIDs 批量获取任务
+func (r *taskRepository) BatchGetTasksByIDs(ctx context.Context, taskIDs []uint64) ([]*model.Task, error) {
+	// 空值直接返回空列表，避免无效SQL
+	if len(taskIDs) == 0 {
+		return []*model.Task{}, nil
+	}
+
+	var tasks []*model.Task
+	err := getDB(ctx, r.db, nil).
+		Preload(model.TaskAssocAssignee, SelectUserFields).
+		Preload(model.TaskAssocProject, SelectProjectFields).
+		Model(&model.Task{}).
+		Select(getTaskSelectColumns()).
+		Where(model.TaskColumnID+" IN ?", taskIDs).
+		Find(&tasks).Error
+
+	if err != nil {
+		return nil, err
+	}
+
+	return tasks, nil
 }
 
 // CountTasksByProjectIDAndIDs 统计指定项目下存在的任务数量

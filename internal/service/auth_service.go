@@ -15,6 +15,7 @@ import (
 	jwtpkg "smart-task-platform/internal/pkg/jwt"
 	"smart-task-platform/internal/pkg/password"
 	redispkg "smart-task-platform/internal/pkg/redis"
+	"smart-task-platform/internal/pkg/utils"
 	"smart-task-platform/internal/pkg/validator"
 	"smart-task-platform/internal/repository"
 )
@@ -198,12 +199,12 @@ func (s *AuthService) Login(ctx context.Context, req *dto.LoginReq) (*dto.LoginR
 		return nil, ErrUserDisabled // 用户被禁用，返回用户被禁用错误
 	}
 
-	now := time.Now()                         // 获取当前时间
-	var accessToken, refreshToken string      // 访问令牌和刷新令牌
-	var expiresIn int64                       // 过期时间，单位秒
-	newSessionID := redispkg.NewSessionID()   // 创建一个新的会话ID
-	newAccessJTI := redispkg.NewAccessJTI()   // 创建一个访问令牌的 jti
-	newRefreshJTI := redispkg.NewRefreshJTI() // 创建一个刷新令牌的 jti
+	now := time.Now()                      // 获取当前时间
+	var accessToken, refreshToken string   // 访问令牌和刷新令牌
+	var expiresIn int64                    // 过期时间，单位秒
+	newSessionID := utils.NewSessionID()   // 创建一个新的会话ID
+	newAccessJTI := utils.NewAccessJTI()   // 创建一个访问令牌的 jti
+	newRefreshJTI := utils.NewRefreshJTI() // 创建一个刷新令牌的 jti
 
 	// 使用事务更新最后登录时间和生成 Token，确保原子性
 	// 更新登录时间和发放 Token 是登录流程中两个重要的步骤，必须保证它们要么同时成功，要么同时失败，不能出现更新了登录时间但没有发放 Token 的情况，也不能出现发放了 Token 但没有更新登录时间的情况，这样才能保证系统状态的一致性和安全性
@@ -327,7 +328,7 @@ func (s *AuthService) Logout(ctx context.Context, claims *jwtpkg.Claims) (*dto.L
 // Me 获取当前用户信息
 func (s *AuthService) Me(ctx context.Context, userID uint64) (*dto.MeResp, error) {
 	// 通过用户 ID 查询用户信息
-	user, err := s.userRepo.GetByID(ctx, userID)
+	user, err := s.userRepo.GetDetailByID(ctx, userID)
 	if err != nil {
 		zap.L().Error("failed to get user by ID",
 			zap.Uint64("user_id", userID),
@@ -410,9 +411,9 @@ func (s *AuthService) RefreshToken(ctx context.Context, req *dto.RefreshTokenReq
 		}
 	}
 
-	now := time.Now()                         // 时间
-	newAccessJTI := redispkg.NewAccessJTI()   // 新 access jti
-	newRefreshJTI := redispkg.NewRefreshJTI() // 新 refresh jti
+	now := time.Now()                      // 时间
+	newAccessJTI := utils.NewAccessJTI()   // 新 access jti
+	newRefreshJTI := utils.NewRefreshJTI() // 新 refresh jti
 	// 生成新的访问 Token 和刷新 Token
 	accessToken, refreshToken, expiresIn, tokenErr := s.jwtMgr.GenerateTokenPair(
 		claims.UserID,
@@ -473,7 +474,7 @@ type AuthUserRepository interface {
 	Create(ctx context.Context, tx *gorm.DB, user *model.User) error
 
 	// 根据 ID 查询用户
-	GetByID(ctx context.Context, id uint64) (*model.User, error)
+	GetDetailByID(ctx context.Context, id uint64) (*model.User, error)
 
 	// 根据 Account 查询用户（用户名或邮箱）
 	GetByAccount(ctx context.Context, account string) (*model.User, error)

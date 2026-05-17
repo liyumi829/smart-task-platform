@@ -3,7 +3,9 @@
 
 package utils
 
-import "time"
+import (
+	"time"
+)
 
 // SafeStringValue 安全获取 *string 的值
 //   - nil  → 返回空字符串 ""
@@ -37,6 +39,11 @@ func SafeValue[T any](val *T) T {
 		return zero
 	}
 	return *val
+}
+
+// SafeGetPtr 安全获取一个指针
+func SafeGetPtr[T any](v T) *T {
+	return &v
 }
 
 // SafePtrClone 安全克隆指针的值，如果nil，则返回nil
