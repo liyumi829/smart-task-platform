@@ -7,6 +7,7 @@ import (
 	"errors"
 	"smart-task-platform/internal/dto"
 	"smart-task-platform/internal/model"
+	"smart-task-platform/internal/pkg/codec"
 	"smart-task-platform/internal/pkg/utils"
 	"smart-task-platform/internal/pkg/validator"
 	"smart-task-platform/internal/repository"
@@ -15,6 +16,7 @@ import (
 	"time"
 
 	"go.uber.org/zap"
+	"gorm.io/datatypes"
 	"gorm.io/gorm"
 )
 
@@ -37,23 +39,39 @@ type cacheTaskInvoker interface {
 	DeleteTaskAllCache(ctx context.Context, taskID uint64) error
 }
 
+type taskSvcNotificationService interface {
+	RecordTaskAssigned(ctx context.Context, tx *gorm.DB, req *RecordTaskAssignedRequest) error
+	RecordTaskStatusChanged(ctx context.Context, tx *gorm.DB, req *RecordTaskStatusChangedRequest) error
+}
+
+type taskSvcTaskActivityRepo interface {
+	// Create 创建任务动态
+	CreateWithTx(ctx context.Context, tx *gorm.DB, activity *model.TaskActivity) error
+}
+
 // TaskService 任务服务
 type TaskService struct {
-	txMgr *repository.TxManager // 事务管理器
-	tr    taskSvcTaskrRepo
-	store cacheTaskInvoker
+	txMgr  *repository.TxManager // 事务管理器
+	tr     taskSvcTaskrRepo
+	tar    taskSvcTaskActivityRepo
+	store  cacheTaskInvoker
+	notify taskSvcNotificationService
 }
 
 // NewTaskService 创建任务服务实例
 func NewTaskService(
 	txMgr *repository.TxManager,
 	taskRepo taskSvcTaskrRepo,
+	taskActivityRepo taskSvcTaskActivityRepo,
 	store cacheTaskInvoker,
+	notify taskSvcNotificationService,
 ) *TaskService {
 	return &TaskService{
-		txMgr: txMgr,
-		tr:    taskRepo,
-		store: store,
+		txMgr:  txMgr,
+		tr:     taskRepo,
+		tar:    taskActivityRepo,
+		store:  store,
+		notify: notify,
 	}
 }
 
@@ -68,7 +86,7 @@ type CreateTaskParam struct {
 	DueDate     string // "" 存储为 NULL
 }
 
-// CreateTask 创建项目
+// CreateTask 创建任务
 func (s *TaskService) CreateTask(ctx context.Context, param *CreateTaskParam) (*dto.CreateTaskResp, error) {
 	// 参数校验
 	if param == nil {
@@ -203,7 +221,20 @@ func (s *TaskService) CreateTask(ctx context.Context, param *CreateTaskParam) (*
 	}
 
 	err = s.txMgr.Transaction(ctx, func(tx *gorm.DB) error {
-		return s.tr.CreateWithTx(ctx, tx, task)
+		if err := s.tr.CreateWithTx(ctx, tx, task); err != nil {
+			return err
+		}
+
+		return s.tar.CreateWithTx(ctx, tx, &model.TaskActivity{
+			TaskID:      task.ID,
+			ProjectID:   task.ProjectID,
+			OperatorID:  param.CreatorID,
+			Action:      model.ActivityActionTaskCreated,
+			Content:     buildContent(model.ActivityContentCreated, creator.Username),
+			RelatedType: utils.StringPtr(model.RelatedTypeTask),
+			RelatedID:   utils.SafeGetPtr(task.ID),
+			ExtraJSON:   nil,
+		})
 	})
 	if err != nil {
 		logger.Error("create task failed: transaction error", zap.Error(err))
@@ -777,9 +808,39 @@ func (s *TaskService) UpdateTaskBaseInfo(ctx context.Context, param *UpdateTaskB
 		}, nil
 	}
 
+	user, exists, err := s.store.GetUserBriefInfo(ctx, param.UserID)
+	if err != nil && !errors.Is(err, repository.ErrUserNotFound) {
+		logger.Error("update task base info failed: get user error",
+			zap.Error(err))
+		return nil, err
+	}
+	if !exists {
+		logger.Warn("update task base info failed: user not found")
+		return nil, ErrUserNotFound
+	}
+	extraJSON, err := codec.MarshalString(map[string]any{
+		"old_base_info": map[string]any{
+			model.TaskColumnTitle:       task.Title,
+			model.TaskColumnPriority:    task.Priority,
+			model.TaskColumnDescription: task.Description,
+			model.TaskColumnDueDate:     task.DueDate,
+		},
+		"new_base_info": map[string]any{
+			model.TaskColumnTitle:       newTitle,
+			model.TaskColumnPriority:    newPriority,
+			model.TaskColumnDescription: newDescription,
+			model.TaskColumnDueDate:     newDueDate,
+		},
+	})
+	if err != nil {
+		logger.Error("update task base info failed: marshal extra json fail",
+			zap.Error(err))
+		return nil, err
+	}
+
 	// 执行事务更新
 	err = s.txMgr.Transaction(ctx, func(tx *gorm.DB) error {
-		return s.tr.UpdateTaskByIDWithTx(ctx, tx, task.ID, &repository.UpdateTaskParam{
+		if err := s.tr.UpdateTaskByIDWithTx(ctx, tx, task.ID, &repository.UpdateTaskParam{
 			Title:             newTitle,
 			Priority:          newPriority,
 			UpdateDescription: updateDescription,
@@ -787,6 +848,19 @@ func (s *TaskService) UpdateTaskBaseInfo(ctx context.Context, param *UpdateTaskB
 			UpdateDueDate:     updateDueDate,
 			DueDate:           newDueDate,
 			// 其余字段默认值表示不更新
+		}); err != nil {
+			return err
+		}
+
+		return s.tar.CreateWithTx(ctx, tx, &model.TaskActivity{
+			TaskID:      task.ID,
+			ProjectID:   task.ProjectID,
+			OperatorID:  param.UserID,
+			Action:      model.ActivityActionTaskUpdated,
+			Content:     buildContent(model.ActivityContentUpdatedBaseInfo, user.Nickname),
+			RelatedType: utils.StringPtr(model.RelatedTypeTask),
+			RelatedID:   utils.SafeGetPtr(task.ID),
+			ExtraJSON:   datatypes.JSON(extraJSON),
 		})
 	})
 	if err != nil {
@@ -898,10 +972,12 @@ func (s *TaskService) UpdateTaskStatus(ctx context.Context, param *UpdateTaskSta
 		)
 		return nil, err
 	}
+	oldStatus := task.Status
+	newStatus := param.Status
 	logger = logger.With(
 		zap.Uint64("project_id", task.ProjectID),
-		zap.String("old_status", task.Status),
-		zap.String("new_status", param.Status),
+		zap.String("old_status", oldStatus),
+		zap.String("new_status", newStatus),
 	)
 
 	// 权限规则：
@@ -957,10 +1033,61 @@ func (s *TaskService) UpdateTaskStatus(ctx context.Context, param *UpdateTaskSta
 		return nil, err
 	}
 
+	user, exists, err := s.store.GetUserBriefInfo(ctx, param.UserID)
+	if err != nil && !errors.Is(err, repository.ErrUserNotFound) {
+		logger.Error("update task status failed: get user error",
+			zap.Error(err))
+		return nil, err
+	}
+	if !exists {
+		logger.Warn("update task status failed: user not found")
+		return nil, ErrUserNotFound
+	}
+	extraJSON, err := codec.MarshalString(map[string]any{
+		"title":      task.Title,
+		"old_status": oldStatus,
+		"new_status": newStatus,
+	})
+	if err != nil {
+		logger.Error("update task status failed: marshal extra json fail",
+			zap.Error(err))
+		return nil, err
+	}
+
 	// 执行事务更新
 	err = s.txMgr.Transaction(ctx, func(tx *gorm.DB) error {
-		return s.tr.UpdateTaskByIDWithTx(ctx, tx, task.ID, updateParam)
+		if err := s.tr.UpdateTaskByIDWithTx(ctx, tx, task.ID, updateParam); err != nil {
+			return err
+		}
+
+		if err := s.tar.CreateWithTx(ctx, tx, &model.TaskActivity{
+			TaskID:      task.ID,
+			ProjectID:   task.ProjectID,
+			OperatorID:  user.ID,
+			Action:      model.ActivityActionTaskStatusChanged,
+			Content:     buildContent(model.ActivityContentUpdatedStatus, user.Nickname, task.Title, oldStatus, newStatus),
+			RelatedType: utils.StringPtr(model.RelatedTypeTask),
+			RelatedID:   utils.SafeGetPtr(task.ID),
+			ExtraJSON:   datatypes.JSON(extraJSON),
+		}); err != nil {
+			return err
+		}
+
+		if task.AssigneeID != nil && *task.AssigneeID != user.ID { // 只有当有负责人且负责人不是操作人时才发通知
+			return s.notify.RecordTaskStatusChanged(ctx, tx, &RecordTaskStatusChangedRequest{
+				TaskID:       task.ID,
+				ProjectID:    task.ProjectID,
+				OperatorID:   user.ID,
+				OperatorName: user.Nickname,
+				ReceiverID:   *task.AssigneeID,
+				TaskTitle:    task.Title,
+				OldStatus:    oldStatus,
+				NewStatus:    newStatus,
+			})
+		}
+		return nil
 	})
+
 	if err != nil {
 		if errors.Is(err, repository.ErrTaskNotFound) {
 			logger.Warn("update task status failed: task not found when updating")
@@ -984,16 +1111,16 @@ func (s *TaskService) UpdateTaskStatus(ctx context.Context, param *UpdateTaskSta
 		completedAt = updateParam.CompletedAt
 	}
 
-	newStatus := task.Status
+	reponseStatus := task.Status
 	if updateParam.Status != nil {
-		newStatus = *updateParam.Status
+		reponseStatus = *updateParam.Status
 	}
 
 	return &dto.UpdateTaskStatusResp{
 		ID:          task.ID,
 		ProjectID:   task.ProjectID,
 		Title:       task.Title,
-		Status:      newStatus,
+		Status:      reponseStatus,
 		Priority:    task.Priority,
 		AssigneeID:  task.AssigneeID,
 		DueDate:     task.DueDate,
@@ -1053,6 +1180,7 @@ func (s *TaskService) UpdateTaskAssignee(ctx context.Context, param *UpdateTaskA
 		)
 		return nil, err
 	}
+	oldAssigneeID := task.AssigneeID
 
 	logger = logger.With(
 		zap.Uint64("project_id", task.ProjectID),
@@ -1118,7 +1246,7 @@ func (s *TaskService) UpdateTaskAssignee(ctx context.Context, param *UpdateTaskA
 	}
 
 	// 正式更新前，先判断，如果更新后和更新前时同一个就不更新直接返回
-	if isSameAssignee(task.AssigneeID, param.AssigneeID) {
+	if isSameAssignee(oldAssigneeID, param.AssigneeID) {
 		// 如果是同一个 assignee 不进行更新，直接返回
 		logger.Info("update task assignee skipped: assignee not changed")
 		return &dto.UpdateTaskAssigneeResp{
@@ -1138,13 +1266,62 @@ func (s *TaskService) UpdateTaskAssignee(ctx context.Context, param *UpdateTaskA
 		v := *param.AssigneeID
 		newAssigneeID = &v
 	}
+	user, exists, err := s.store.GetUserBriefInfo(ctx, param.UserID)
+	if err != nil && !errors.Is(err, repository.ErrUserNotFound) {
+		logger.Error("update task assignee failed: get user error",
+			zap.Error(err))
+		return nil, err
+	}
+	if !exists {
+		logger.Warn("update task assignee failed: user not found")
+		return nil, ErrUserNotFound
+	}
+	extraJSON, err := codec.MarshalString(map[string]any{
+		"title":           task.Title,
+		"old_assignee_id": oldAssigneeID,
+		"new_assignee_id": param.AssigneeID,
+	})
+	if err != nil {
+		logger.Error("update task status failed: marshal extra json fail",
+			zap.Error(err))
+		return nil, err
+	}
+
 	// 执行事务更新负责人
 	now := time.Now()
 	err = s.txMgr.Transaction(ctx, func(tx *gorm.DB) error {
-		return s.tr.UpdateTaskByIDWithTx(ctx, tx, task.ID, &repository.UpdateTaskParam{
+		if err := s.tr.UpdateTaskByIDWithTx(ctx, tx, task.ID, &repository.UpdateTaskParam{
 			UpdateAssignee: true,
 			AssigneeID:     newAssigneeID,
-		})
+		}); err != nil {
+			return err
+		}
+
+		if err := s.tar.CreateWithTx(ctx, tx, &model.TaskActivity{
+			TaskID:      task.ID,
+			ProjectID:   task.ProjectID,
+			OperatorID:  param.UserID,
+			Action:      model.ActivityActionTaskAssigned,
+			Content:     buildContent(model.ActivityContentUpdatedAssignee, user.Nickname, task.Title),
+			RelatedType: utils.StringPtr(model.RelatedTypeTask),
+			RelatedID:   utils.SafeGetPtr(task.ID),
+			ExtraJSON:   datatypes.JSON(extraJSON),
+		}); err != nil {
+			return err
+		}
+
+		// 只有当有新负责人且新负责人不是原负责人时才发通知
+		if newAssigneeID != nil && (oldAssigneeID == nil || *oldAssigneeID != *newAssigneeID) {
+			return s.notify.RecordTaskAssigned(ctx, tx, &RecordTaskAssignedRequest{
+				TaskID:       task.ID,
+				ProjectID:    task.ProjectID,
+				AssigneeID:   *newAssigneeID,
+				TaskTitle:    task.Title,
+				OperatorID:   user.ID,
+				OperatorName: user.Nickname,
+			})
+		}
+		return nil
 	})
 	if err != nil {
 		if errors.Is(err, repository.ErrTaskNotFound) {

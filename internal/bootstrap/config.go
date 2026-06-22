@@ -31,14 +31,30 @@ type Config struct {
 
 	// JWT 配置
 	JWT JWTConfig `yaml:"jwt"`
+
+	// RabbitMQ 配置
+	RabbitMQ RabbitMQConfig `yaml:"rabbitmq"`
+
+	// OutBoxManager 配置
+	OutboxWorkerManager OutboxWorkerManagerConfig `yaml:"outbox_worker_manager"`
+
+	// HandleWorkerManager 配置
+	HandleWorkerManager HandleWorkerManagerConfig `yaml:"handle_worker_manager"`
 }
 
 func (c *Config) setDefault() {
-	c.Server.setDefault() // 服务器
-	c.Logger.setDefault() // 日志
-	c.MySQL.setDefault()  // MySQL
-	c.Redis.setDefault()  // Redis
-	c.JWT.setDefault()    // JWT
+	c.Server.setDefault()              // 服务器
+	c.Logger.setDefault()              // 日志
+	c.MySQL.setDefault()               // MySQL
+	c.Redis.setDefault()               // Redis
+	c.JWT.setDefault()                 // JWT
+	c.RabbitMQ.setDefault()            // RabbitMQ
+	c.OutboxWorkerManager.setDefault() // OutboxWorkerManager
+	c.HandleWorkerManager.setDefault() // HandleWorkerManager
+
+	// 统一配置
+	c.HandleWorkerManager.RetryExchangeName = c.RabbitMQ.RetryExchangeName
+	c.HandleWorkerManager.RetryRoutingKey = c.RabbitMQ.RetryRoutingKey
 }
 
 func InitConfig(file string) (*Config, error) {

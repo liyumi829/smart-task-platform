@@ -51,6 +51,7 @@ func (c Converter) TaskPermissionInfo(task *model.Task) *cacheObj.TaskPermission
 
 	return &cacheObj.TaskPermissionInfo{
 		ID:         task.ID,
+		Title:      task.Title,
 		ProjectID:  task.ProjectID,
 		CreatorID:  task.CreatorID,
 		AssigneeID: task.AssigneeID,

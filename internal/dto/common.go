@@ -44,8 +44,3 @@ type PageResp[T interface{}] struct {
 	PageSize int    `json:"page_size"` // 每页条数
 	HasMore  bool   `json:"has_more"`  // 判断是否还有页码
 }
-
-// NotificationIDUri 通知 ID 路径参数
-type NotificationIDUri struct {
-	ID uint64 `uri:"id" binding:"required,min=1"` // 通知 ID
-}

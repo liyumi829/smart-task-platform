@@ -68,3 +68,54 @@ jwt:
   access_token_ttl: 3600
   # JWT 刷新过期时间，单位: s
   refresh_token_ttl: 604800
+
+# RabbitMQ 配置
+rabbitmq:
+  # host
+  host: "localhost"
+  # user
+  user: "root"
+  # password
+  password: "967096489"
+  # 业务队列名称
+  queue_name: "smart-task-platform.notification.queue"
+  # 每次拉取的条数
+  prefetch_count: 10
+
+# Outbox Worker 管理器配置
+outbox_worker_manager:
+  # 是否禁用
+  disabled: false
+  # 并发工作协程数
+  worker_count: 1
+  # 工作协程 ID 前缀
+  worker_id_prefix: "outbox-worker"
+  # 优雅关闭超时时间
+  stop_timeout: "10s"
+  # worker 配置
+  outbox_worker:
+    # 轮询数据库间隔
+    poll_interval: "3s"
+    # 每批拉取消息数量
+    batch_size: 100
+    # 单批处理超时时间
+    processing_timeout: "10m"
+    # 处理失败重试退避时间
+    retry_backoff: "30s"
+    # 启动时是否重置超时任务
+    reset_timeout_on_startup: true
+
+# Handle Worker 管理器配置
+handle_worker_manager:
+  # 是否禁用
+  disabled: false
+  # 并发工作协程数
+  worker_count: 1
+  # 工作协程 ID 前缀
+  worker_id_prefix: "forwarding-worker"
+  # 优雅关闭超时时间
+  stop_timeout: "10s"
+  # worker 配置
+  handle_worker:
+    # 最大重试次数
+    max_retries: 3

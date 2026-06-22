@@ -5,14 +5,17 @@ package service
 import (
 	"context"
 	"errors"
+	"fmt"
 	"smart-task-platform/internal/dto"
 	"smart-task-platform/internal/model"
+	"smart-task-platform/internal/pkg/codec"
 	"smart-task-platform/internal/pkg/utils"
 	"smart-task-platform/internal/repository"
 	"strings"
 	"time"
 
 	"go.uber.org/zap"
+	"gorm.io/datatypes"
 )
 
 // fixPageParams 分页参数自动矫正（兜底处理）
@@ -190,6 +193,109 @@ func buildTaskCommentBaseFields(comment *model.TaskComment) *dto.TaskCommentBase
 	}
 }
 
+func buildTaskCommentItem(comment *model.TaskComment, parentDeletedMap map[uint64]bool) *dto.TaskCommentListItem {
+	if comment == nil {
+		return nil
+	}
+
+	item := &dto.TaskCommentListItem{
+		TaskCommentBaseFields: buildTaskCommentBaseFields(comment),
+	}
+
+	// 判断父评论是否已经被删除
+	if comment.ParentID != nil && *comment.ParentID > 0 {
+		item.ParentDeleted = parentDeletedMap[*comment.ParentID]
+	}
+
+	if comment.ReplyToUser != nil {
+		item.ReplyToUser = buildUserPublicProfile(comment.ReplyToUser)
+	}
+
+	return item
+}
+
+// 构造任务活动表项
+func buildTaskActivityItem(activity *model.TaskActivity) *dto.TaskActivityListItem {
+	if activity == nil {
+		return nil
+	}
+
+	return &dto.TaskActivityListItem{
+		ID:         activity.ID,
+		TaskID:     activity.TaskID,
+		Type:       activity.Action,
+		Content:    activity.Content,
+		OperatorID: activity.OperatorID,
+		Operator:   buildUserPublicProfile(activity.Operator),
+		CreatedAt:  activity.CreatedAt,
+	}
+}
+
+// 构造通知的表项
+func buildNotificationItem(notification *model.Notification) *dto.NotificationListItem {
+	if notification == nil {
+		return nil
+	}
+
+	return &dto.NotificationListItem{
+		ID:        notification.ID,
+		Type:      notification.Type,
+		Title:     notification.Title,
+		Content:   notification.Content,
+		IsRead:    notification.IsRead,
+		CreatedAt: notification.CreatedAt,
+	}
+}
+
+// 构造通知内容
+func buildContent(format string, args ...any) string {
+	return fmt.Sprintf(format, args...)
+}
+
+// marshalNotificationPayload 序列化通知事件 Payload
+func marshalNotificationPayload(v any) (datatypes.JSON, error) {
+	b, err := codec.Marshal(v)
+	if err != nil {
+		return nil, err
+	}
+
+	return datatypes.JSON(b), nil
+}
+
+// buildNotificationOutboxMessage 构建通知 Outbox 消息
+func buildNotificationOutboxMessage(eventType string, notification *model.Notification) (*model.OutboxMessage, error) {
+	payload, err := marshalNotificationPayload(&dto.ForwardMessage{
+		NotificationID: notification.ID,
+		UserID:         notification.UserID,
+		SenderID:       notification.SenderID,
+		Type:           notification.Type,
+		Title:          notification.Title,
+		Content:        notification.Content,
+		RelatedType:    notification.RelatedType,
+		RelatedID:      notification.RelatedID,
+		CreatedAt:      notification.CreatedAt.Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	return &model.OutboxMessage{
+		EventID:       buildNotificationOutboxEventID(eventType, notification.ID),
+		EventType:     eventType,
+		ExchangeName:  model.DefaultOutboxExchangeName,
+		RoutingKey:    model.DefaultOutboxRoutingKey,
+		Payload:       payload,
+		Status:        model.OutboxMessageStatusPending,
+		RetryCount:    0,
+		MaxRetryCount: model.DefaultOutboxMaxRetryCount,
+	}, nil
+}
+
+// buildNotificationOutboxEventID 构建稳定幂等事件 ID
+func buildNotificationOutboxEventID(eventType string, notificationID uint64) string {
+	return fmt.Sprintf("%s:%s:%d", eventType, utils.Uuid(), notificationID)
+}
+
 // ProjectMemberFinder  项目成员角色等级查询接口
 type ProjectMemberFinder interface {
 	GetProjectMemberRole(ctx context.Context, projectID, userID uint64) (string, bool, error)
@@ -301,8 +407,8 @@ type taskCommentPermissionChecker interface {
 	IsProjectMember(ctx context.Context, projectID, userID uint64) (bool, error)
 }
 
-// validateTaskCommentAccess 校验任务是否属于项目，并校验用户是否为项目成员
-func validateTaskCommentAccess(
+// validTaskAccess 校验任务是否属于项目，并校验用户是否为项目成员
+func validTaskAccess(
 	ctx context.Context,
 	invoker taskCommentPermissionChecker,
 	projectID uint64,
@@ -382,28 +488,4 @@ func collectTaskCommentParentIDs(comments []*model.TaskComment) []uint64 {
 		ids = append(ids, id)
 	}
 	return ids
-}
-
-func buildTaskCommentItem(
-	comment *model.TaskComment,
-	parentDeletedMap map[uint64]bool,
-) *dto.TaskCommentListItem {
-	if comment == nil {
-		return nil
-	}
-
-	item := &dto.TaskCommentListItem{
-		TaskCommentBaseFields: buildTaskCommentBaseFields(comment),
-	}
-
-	// 判断父评论是否已经被删除
-	if comment.ParentID != nil && *comment.ParentID > 0 {
-		item.ParentDeleted = parentDeletedMap[*comment.ParentID]
-	}
-
-	if comment.ReplyToUser != nil {
-		item.ReplyToUser = buildUserPublicProfile(comment.ReplyToUser)
-	}
-
-	return item
 }

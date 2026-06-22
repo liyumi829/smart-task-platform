@@ -16,14 +16,23 @@ import (
 	"gorm.io/gorm"
 )
 
-// taskCommentSVCCommentRepo 评论服务依赖的评论仓储能力
-type taskCommentSVCCommentRepo interface {
+// taskCommentSvcCommentRepo 评论服务依赖的评论仓储能力
+type taskCommentSvcCommentRepo interface {
 	CreateCommentWithTx(ctx context.Context, tx *gorm.DB, comment *model.TaskComment) error
 	SearchComments(ctx context.Context, query *repository.SearchTaskCommentsQuery) (*repository.SearchTaskCommentResult, error)
 	SoftDeleteCommentWithTx(ctx context.Context, tx *gorm.DB, commentID uint64) error
 
 	GetDetailByID(ctx context.Context, commentID uint64) (*model.TaskComment, error)
 	GetTaskCommentDeleteStatusByIDs(ctx context.Context, ids []uint64) ([]*model.TaskComment, error)
+}
+
+type taskCommentSvcTaskActivityRepo interface {
+	// Create 创建任务动态
+	CreateWithTx(ctx context.Context, tx *gorm.DB, activity *model.TaskActivity) error
+}
+
+type taskCommentSvcNotificationService interface {
+	RecordTaskCommentCreated(ctx context.Context, tx *gorm.DB, req *RecordTaskCommentCreatedRequest) error
 }
 
 // cacheTaskCommentInvoker
@@ -38,21 +47,27 @@ type cacheTaskCommentInvoker interface {
 
 // TaskCommentService 任务评论服务
 type TaskCommentService struct {
-	txMgr *repository.TxManager     // 事务管理器
-	tcr   taskCommentSVCCommentRepo // 评论仓储接口
-	store cacheTaskCommentInvoker
+	txMgr  *repository.TxManager     // 事务管理器
+	tcr    taskCommentSvcCommentRepo // 评论仓储接口
+	tar    taskCommentSvcTaskActivityRepo
+	store  cacheTaskCommentInvoker
+	notify taskCommentSvcNotificationService
 }
 
 // NewTaskCommentService 创建评论服务实例
 func NewTaskCommentService(
 	txMgr *repository.TxManager,
-	taskCommentRepo taskCommentSVCCommentRepo,
+	taskCommentRepo taskCommentSvcCommentRepo,
+	taskActivityRepo taskCommentSvcTaskActivityRepo,
 	store cacheTaskCommentInvoker,
+	notify taskCommentSvcNotificationService,
 ) *TaskCommentService {
 	return &TaskCommentService{
-		txMgr: txMgr,
-		tcr:   taskCommentRepo,
-		store: store,
+		txMgr:  txMgr,
+		tcr:    taskCommentRepo,
+		tar:    taskActivityRepo,
+		store:  store,
+		notify: notify,
 	}
 }
 
@@ -130,7 +145,7 @@ func (s *TaskCommentService) CreateTaskComment(ctx context.Context, param *Creat
 	}
 
 	// 查任务、再看是否是当前项目成员
-	task, err := validateTaskCommentAccess(ctx, s.store, param.ProjectID, param.TaskID, param.CreatorID, logger)
+	task, err := validTaskAccess(ctx, s.store, param.ProjectID, param.TaskID, param.CreatorID, logger)
 	if err != nil {
 		// 返回两个错误：TaskNotFound 和 TaskForbidden
 		logger.Warn("create task comment failed: task comment access check error",
@@ -146,13 +161,13 @@ func (s *TaskCommentService) CreateTaskComment(ctx context.Context, param *Creat
 		if err != nil {
 			if errors.Is(err, repository.ErrTaskCommentNotFound) {
 				// 父评论不存在
-				logger.Warn("create task comment failed: parentComment comment not found",
+				logger.Warn("create task comment failed: parent comment not found",
 					zap.Error(err),
 				)
 				return nil, ErrParentCommentNotFound
 			}
 
-			logger.Error("create task comment failed: get parentComment comment error",
+			logger.Error("create task comment failed: get parent comment error",
 				zap.Error(err),
 			)
 			return nil, err
@@ -160,7 +175,7 @@ func (s *TaskCommentService) CreateTaskComment(ctx context.Context, param *Creat
 
 		// 父评论存在，检查父评论是否是当前任务
 		if parentComment.TaskID != param.TaskID {
-			logger.Warn("create task comment failed: parentComment comment does not belong to task",
+			logger.Warn("create task comment failed: parent comment does not belong to task",
 				zap.Uint64("parent_comment_task_id", parentComment.TaskID),
 			)
 			return nil, ErrInvalidParentComment // 返回不合法的父评论
@@ -202,8 +217,62 @@ func (s *TaskCommentService) CreateTaskComment(ctx context.Context, param *Creat
 	}
 
 	err = s.txMgr.Transaction(ctx, func(tx *gorm.DB) error {
-		return s.tcr.CreateCommentWithTx(ctx, tx, comment)
+		if err := s.tcr.CreateCommentWithTx(ctx, tx, comment); err != nil {
+			return err
+		}
+
+		if err := s.tar.CreateWithTx(ctx, tx, &model.TaskActivity{
+			TaskID:      task.ID,
+			ProjectID:   task.ProjectID,
+			OperatorID:  param.CreatorID,
+			Action:      model.ActivityActionCommentAdded,
+			Content:     buildContent(model.ActivityContentCommentCreated, user.Nickname, task.Title),
+			RelatedType: utils.StringPtr(model.RelatedTypeComment),
+			RelatedID:   utils.SafeGetPtr(comment.ID),
+			ExtraJSON:   nil,
+		}); err != nil {
+			return err
+		}
+
+		// 如果回复的人是项目负责人，那么项目负责人应该只收到一条评论
+		var isReplyAssignee = replyToUser != nil && task.AssigneeID != nil && replyToUser.ID == *task.AssigneeID
+
+		// 第一步：处理回复通知。只通知回复的人，回复自己的评论不通知
+		if replyToUser != nil && (replyToUser.ID != user.ID) {
+			return s.notify.RecordTaskCommentCreated(ctx, tx, &RecordTaskCommentCreatedRequest{
+				TaskID:       task.ID,
+				ProjectID:    task.ProjectID,
+				CommentID:    comment.ID,
+				OperatorID:   user.ID,
+				ReceiverID:   *replyToUserID,
+				TaskTitle:    task.Title,
+				OperatorName: user.Nickname,
+				Content:      param.Content,
+				isReply:      true, // 这是一个回复类型的评论
+			})
+		}
+
+		// 第二步：只有不是回复负责人、且操作人不是负责人，才给负责人发通知
+		// 规则：负责人要收到所有非自己的评论，但如果是回复他，就不重复发
+		if task.AssigneeID != nil && (*task.AssigneeID != user.ID) && !isReplyAssignee {
+			if err := s.notify.RecordTaskCommentCreated(ctx, tx, &RecordTaskCommentCreatedRequest{
+				TaskID:       task.ID,
+				ProjectID:    task.ProjectID,
+				CommentID:    comment.ID,
+				OperatorID:   user.ID,
+				ReceiverID:   *task.AssigneeID,
+				TaskTitle:    task.Title,
+				OperatorName: user.Nickname,
+				Content:      param.Content,
+				isReply:      false, // 这是一个给负责人的评论
+			}); err != nil {
+				return err
+			}
+		}
+
+		return nil
 	})
+
 	if err != nil {
 		logger.Error("create task comment failed: create comment transaction error",
 			zap.Error(err),
@@ -266,9 +335,9 @@ func (s *TaskCommentService) ListTaskComments(ctx context.Context, param *ListTa
 	)
 
 	// 数据库进行身份验证
-	// 用户是否存在、项目是否存在、任务是否存在、用户是否是项目成员
-	// validateTaskCommentAccess 都完成了
-	task, err := validateTaskCommentAccess(ctx, s.store, param.ProjectID, param.TaskID, param.UserID, logger)
+	// 项目是否存在、任务是否存在、用户是否是项目成员
+	// validTaskAccess 都完成了
+	task, err := validTaskAccess(ctx, s.store, param.ProjectID, param.TaskID, param.UserID, logger)
 	if err != nil {
 		// 调用返回两个错误：ErrTaskNotFound、ErrTaskForbidden
 		logger.Warn("list task comments failed: task comment access check error",
@@ -359,7 +428,7 @@ func (s *TaskCommentService) RemoveTaskComment(ctx context.Context, param *Remov
 	// 用户是否存在、项目是否存在、任务是否存在
 	// 用户是否是项目的owner/admin，或者是任务创始人
 
-	task, err := validateTaskCommentAccess(ctx, s.store, param.ProjectID, param.TaskID, param.UserID, logger)
+	task, err := validTaskAccess(ctx, s.store, param.ProjectID, param.TaskID, param.UserID, logger)
 	if err != nil {
 		// 返回 ErrTaskNotFound/ErrTaskForbidden/查询数据库失败的err
 		logger.Warn("remove task comment failed: task comment access check error",
@@ -414,10 +483,33 @@ func (s *TaskCommentService) RemoveTaskComment(ctx context.Context, param *Remov
 		)
 		return nil, ErrTaskForbidden
 	}
+	user, exists, err := s.store.GetUserBriefInfo(ctx, param.UserID)
+	if err != nil && !errors.Is(err, repository.ErrUserNotFound) {
+		logger.Error("remove task comment failed: get user error",
+			zap.Error(err))
+		return nil, err
+	}
+	if !exists {
+		logger.Warn("remove task comment failed: user not found")
+		return nil, ErrUserNotFound
+	}
 
 	// 事务执行删除操作
 	err = s.txMgr.Transaction(ctx, func(tx *gorm.DB) error {
-		return s.tcr.SoftDeleteCommentWithTx(ctx, tx, param.CommentID)
+		if err := s.tcr.SoftDeleteCommentWithTx(ctx, tx, param.CommentID); err != nil {
+			return err
+		}
+
+		return s.tar.CreateWithTx(ctx, tx, &model.TaskActivity{
+			TaskID:      task.ID,
+			ProjectID:   task.ProjectID,
+			OperatorID:  user.ID,
+			Action:      model.ActivityActionCommentDeleted,
+			Content:     buildContent(model.ActivityContentCommentDeleted, user.Nickname, task.Title),
+			RelatedType: utils.StringPtr(model.RelatedTypeTask),
+			RelatedID:   utils.SafeGetPtr(task.ID),
+			ExtraJSON:   nil,
+		})
 	})
 	if err != nil {
 		if errors.Is(err, repository.ErrTaskCommentNotFound) {

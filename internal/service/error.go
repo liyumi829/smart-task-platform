@@ -66,4 +66,9 @@ var (
 	ErrParentCommentNotFound     = errors.New("parent comment not found")             // 父评论不存在
 	ErrInvalidParentComment      = errors.New("invalid parent comment")               // 不合法的父评论
 	ErrTaskCommentForbidden      = errors.New("task comment forbidden")               // 无评论操作权限
+
+	ErrInvalidTaskActivityParam = errors.New("invalid task activity parameter") // 不合法的任务活动参数
+
+	ErrNotificationNotFound     = errors.New("notification not found")        // 通知没有找到
+	ErrInvalidNotificationParam = errors.New("invalid notification paramter") // 不合法的通知参数
 )

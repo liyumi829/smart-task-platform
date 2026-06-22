@@ -17,6 +17,7 @@ import (
 // 注意：该缓存只用于权限判断、删除任务前校验等只读场景，不能用于更新任务。
 type TaskPermissionInfo struct {
 	ID         uint64  `json:"id"`
+	Title      string  `json:"title"`
 	ProjectID  uint64  `json:"project_id"`
 	CreatorID  uint64  `json:"creator_id"`
 	AssigneeID *uint64 `json:"assignee_id"`
@@ -31,6 +32,7 @@ func (info *TaskPermissionInfo) ToModel() *model.Task {
 
 	return &model.Task{
 		ID:         info.ID,
+		Title:      info.Title,
 		ProjectID:  info.ProjectID,
 		CreatorID:  info.CreatorID,
 		AssigneeID: info.AssigneeID,

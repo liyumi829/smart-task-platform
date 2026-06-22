@@ -18,7 +18,7 @@ import (
 	"go.uber.org/zap"
 )
 
-// TaskCommmentHandler 任务评论处理器
+// TaskCommentHandler 任务评论处理器
 type TaskCommentHandler struct {
 	taskCommentService *service.TaskCommentService
 }

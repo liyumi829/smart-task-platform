@@ -22,6 +22,9 @@ func Register(
 	projectMemberHandler *handler.ProjectMemberHandler,
 	taskHandler *handler.TaskHandler,
 	taskCommentHandler *handler.TaskCommentHandler,
+	taskActivityHandler *handler.TaskActivityHandler,
+	notificationHandler *handler.NotificationHandler,
+	websocketHandler *handler.WebSocketHandler,
 ) {
 	r.GET("/ping",
 		func(c *gin.Context) {
@@ -40,7 +43,13 @@ func Register(
 		RegisterProjectMemberRoutes(api, projectMemberHandler, jwtMgr, authStore) // 注册项目成员模块路由
 		RegisterTaskRoutes(api, taskHandler, jwtMgr, authStore)                   // 注册任务模块路由
 		RegisterTaskCommentRoutes(api, taskCommentHandler, jwtMgr, authStore)     // 注册任务评论模块路由
+		RegisterTaskActivityRoutes(api, taskActivityHandler, jwtMgr, authStore)   // 注册任务活动模块路由
+		RegisterNotificationRoutes(api, notificationHandler, jwtMgr, authStore)   // 注册消息通知模块路由
 		// 其他模块的路由注册函数也会在这里调用，例如：
 		// ...
+	}
+	ws := r.Group("")
+	{
+		RegisterWebsocket(ws, websocketHandler, jwtMgr, authStore)
 	}
 }
